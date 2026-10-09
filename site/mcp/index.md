@@ -376,7 +376,7 @@ Note the two distinct locations: API keys saved by `althing login` live in the c
 
 Server starts but no tools appear  The MCP server needs the `[mcp]` extra: `pip install "althing[mcp]"`. After config edits or upgrades, fully quit and relaunch the host — tool lists are cached per server entry. Sanity-check by running `althing mcp-serve` in a terminal; it should boot silently.
 
-Missing API key  The subprocess only sees env vars from the MCP `env` block. A shell-profile export does not propagate. Set the key in the `env` block, run `althing login` to seed the on-disk credential store, or omit the key and let MCP *sampling* borrow the host's LLM access (Claude Desktop, Claude Code, Cursor, Windsurf).
+Missing API key  The subprocess only sees env vars from the MCP `env` block. A shell-profile export does not propagate. Set the key in the `env` block, run `althing login` to seed the on-disk credential store, pass a subscription CLI model such as `model="claude-code:haiku"` to run on the signed-in Claude Code / Codex CLI, or omit the key and let MCP *sampling* borrow the host's LLM access (deprecated in MCP 2026-07-28, and not supported by Claude Code).
 
 Timeouts on long panels  A 5-persona × 3-question BYOK panel takes 30–90 seconds; cross-provider ensembles can take 2–5 minutes. Raise the host's per-tool timeout (Hermes: `timeout: 300`). For exploratory work, prefer `run_quick_poll` over `run_panel`.
 

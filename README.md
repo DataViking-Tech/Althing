@@ -419,10 +419,20 @@ Add to your editor's MCP config (Claude Code, Cursor, Windsurf):
 
 ### Zero-config first run via sampling
 
-No API key? No problem. When the invoking MCP client (Claude Desktop,
-Claude Code, Cursor, Windsurf) advertises the `sampling` capability,
-althing falls back to asking the client to run the LLM completion on
-its behalf — using the client's own subscription. That means `run_prompt`
+No API key? When the invoking MCP client advertises the `sampling`
+capability, althing falls back to asking the client to run the LLM
+completion on its behalf — using the client's own subscription.
+
+> **Sampling is deprecated and not universally supported.** MCP
+> 2026-07-28 deprecated sampling (SEP-2577; still functional for at
+> least 12 months), and **Claude Code has never implemented it**
+> ([anthropics/claude-code#1785](https://github.com/anthropics/claude-code/issues/1785)).
+> To use a Claude or ChatGPT subscription from Claude Code (or anywhere
+> else), pass a subscription CLI model instead — e.g.
+> `model="claude-code:haiku"` — see
+> [Subscription CLI models](#subscription-cli-models-claude-code--codex).
+
+With a sampling-capable client, That means `run_prompt`
 and small `run_quick_poll` calls (up to 3 personas) work with zero env
 setup:
 
@@ -1083,6 +1093,8 @@ althing works with any LLM provider. Set the appropriate environment variable:
 | OpenRouter | `OPENROUTER_API_KEY` | `--model openrouter/anthropic/claude-haiku-4-5` |
 | xAI (Grok) | `XAI_API_KEY` | `--model grok` |
 | Any OpenAI-compatible | `OPENAI_API_KEY` + `OPENAI_BASE_URL` | `--model <model-id>` |
+| Claude Code CLI (subscription) | none — signed-in `claude` on PATH | `--model claude-code:sonnet` |
+| Codex CLI (subscription) | none — signed-in `codex` on PATH | `--model codex:` or `--model codex:<model-id>` |
 
 ```bash
 # Use Claude (default)
@@ -1095,6 +1107,48 @@ althing panel run --personas p.yaml --instrument s.yaml --model gpt-4o
 OPENAI_BASE_URL=http://localhost:11434/v1 \
 althing panel run --personas p.yaml --instrument s.yaml --model llama3
 ```
+
+### Subscription CLI models (`claude-code:` / `codex:`)
+
+The `claude-code:<model>` and `codex:<model>` prefixes run each completion
+through a locally installed, signed-in agent CLI in headless mode
+(`claude -p` / `codex exec`), so calls draw on your Claude or ChatGPT
+subscription instead of an API key. Every call is an isolated, tool-less
+completion: the CLI's agent system prompt is replaced by the persona
+prompt, tools / MCP servers / user settings are disabled, nothing is
+persisted, and the process runs in an empty scratch directory. Structured
+output maps onto the CLIs' native JSON-schema flags.
+
+```bash
+althing panel run --personas p.yaml --instrument s.yaml --model claude-code:haiku
+althing prompt "Hello" --model codex:          # Codex CLI's default model
+```
+
+Things to know before relying on it:
+
+- **No sampling controls.** `temperature`, `top_p`, `seed`, and
+  `max_tokens` are not exposed by the CLIs and are ignored (with a
+  warning). Results are not directly comparable to API-key runs of the
+  same model — label them separately (e.g. on SynthBench).
+- **Subscription usage limits** bound throughput. Usage-limit errors
+  surface as rate limits and get the normal backoff. Cap in-flight CLI
+  processes with `ALTHING_CLI_MAX_CONCURRENT` (default 4) and per-call
+  time with `ALTHING_CLI_TIMEOUT` (default 300 s).
+- **Text only, forced single-tool only.** Attachments and free tool
+  use are rejected; multi-turn persona history is flattened into one
+  prompt per call.
+- **Cost figures are estimates.** There is no per-call bill, so cost is
+  the local pricing-table estimate (API list-price equivalent) and
+  `--max-cost` acts as a usage budget.
+- **API keys are stripped.** `claude` prefers `ANTHROPIC_API_KEY` over
+  the subscription login, so althing removes it from the child process
+  environment. Set `ALTHING_CLAUDE_CODE_ALLOW_API_KEY=1` to keep it.
+- Optional: `ALTHING_CLAUDE_CODE_EFFORT` / `ALTHING_CODEX_EFFORT` pass a
+  reasoning-effort level; `ALTHING_CLAUDE_CODE_BIN` / `ALTHING_CODEX_BIN`
+  override the executable path.
+
+These prefixes are only used when you ask for them — they are never
+picked as an implicit default.
 
 > **Large panels and the OpenRouter default (synthbench#261):** when
 > `--model` is omitted, the default is resolved from whichever key is

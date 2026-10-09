@@ -66,7 +66,35 @@ For auto-generated release notes, see [GitHub Releases](https://github.com/DataV
     depends on `althing`
   Historical changelog entries below retain the old name.
 
+- **Sampling docs corrected.** Claude Code is no longer listed as a
+  sampling-capable host (it has never implemented the client side —
+  anthropics/claude-code#1785), the docs note the MCP 2026-07-28
+  sampling deprecation, and the no-credentials error now points at
+  subscription CLI models.
+
 ### Added
+
+- **Subscription CLI providers: `claude-code:<model>` and `codex:<model>`.**
+  Completions can now run through a locally installed, signed-in Claude
+  Code (`claude -p`) or Codex (`codex exec`) CLI, drawing on the user's
+  Claude / ChatGPT subscription instead of an API key — the
+  forward-looking replacement for MCP sampling, which MCP 2026-07-28
+  deprecated (SEP-2577) and Claude Code never implemented. Each call is
+  an isolated, tool-less completion (agent prompt replaced by the persona
+  prompt; tools, MCP servers, user settings, and session persistence
+  disabled; empty scratch working directory), and forced-tool structured
+  output maps onto the CLIs' native JSON-schema flags, so panels,
+  extraction, and SynthBench's `althing` provider work unchanged. The
+  prefixes are explicit-only (never a credential fallback), structured
+  output escalation stays on the same CLI, and an explicit CLI model
+  makes MCP tools run without a key or sampling. Limits: no
+  temperature/top_p/seed/max_tokens control, text-only, throughput bound
+  by subscription usage limits (surfaced as rate limits). Knobs:
+  `ALTHING_CLI_MAX_CONCURRENT`, `ALTHING_CLI_TIMEOUT`,
+  `ALTHING_CLAUDE_CODE_EFFORT` / `ALTHING_CODEX_EFFORT`,
+  `ALTHING_CLAUDE_CODE_BIN` / `ALTHING_CODEX_BIN`, and
+  `ALTHING_CLAUDE_CODE_ALLOW_API_KEY` (by default `ANTHROPIC_API_KEY` is
+  stripped from the child env so the CLI can't silently bill it).
 
 - **`cost show <result-id>`.** Per-run cost breakdown for one saved
   panel result — total/panelist cost, per-model token + USD rollup, and

@@ -26,6 +26,7 @@ from althing.llm.models import (
     ToolInvocationBlock,
     ToolResultBlock,
 )
+from althing.llm.providers.subscription_cli import CLAUDE_CODE_PREFIX, CODEX_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,8 @@ def _escalation_model_for(model: str) -> str | None:
     the final strike (gh#571). Per family:
 
     * ``openrouter/*``  → OpenRouter-served Sonnet (same key; sy-549, unchanged)
+    * ``claude-code:*`` → ``claude-code:sonnet`` (stays on the subscription CLI)
+    * ``codex:*``       → none
     * ``claude-*``      → ``sonnet`` alias (historical behaviour, unchanged)
     * ``gemini-*``      → ``gemini-2.5-pro``
     * ``grok-*``        → ``grok-4``
@@ -113,6 +116,15 @@ def _escalation_model_for(model: str) -> str | None:
 
     if model.startswith(_OPENROUTER_PREFIX):
         return _OPENROUTER_ESCALATION_MODEL
+
+    # Subscription CLI models must stay on the same CLI: ``claude-code:haiku``
+    # starts with ``claude-`` and would otherwise escalate to the API-key
+    # ``sonnet`` alias.
+    if model.startswith(CLAUDE_CODE_PREFIX):
+        target = f"{CLAUDE_CODE_PREFIX}sonnet"
+        return None if model == target else target
+    if model.startswith(CODEX_PREFIX):
+        return None  # no stable cheap/strong model ladder on the Codex CLI
 
     canonical = resolve_alias(model)
     if canonical.startswith("claude-"):

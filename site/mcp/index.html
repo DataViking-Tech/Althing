@@ -1558,9 +1558,13 @@
               the
               <code class="text-slate-300">env</code> block, run
               <code class="text-slate-300">althing login</code> to
-              seed the on-disk credential store, or omit the key and
-              let MCP <em>sampling</em> borrow the host's LLM access
-              (Claude Desktop, Claude Code, Cursor, Windsurf).
+              seed the on-disk credential store, pass a subscription
+              CLI model such as
+              <code class="text-slate-300">model="claude-code:haiku"</code>
+              to run on the signed-in Claude Code / Codex CLI, or omit
+              the key and let MCP <em>sampling</em> borrow the host's
+              LLM access (deprecated in MCP 2026-07-28, and not
+              supported by Claude Code).
             </dd>
           </div>
           <div>

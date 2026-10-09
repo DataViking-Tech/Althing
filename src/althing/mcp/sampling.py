@@ -1,9 +1,15 @@
 """MCP sampling bridge.
 
 MCP's *sampling* feature lets an MCP server ask the invoking client
-(Claude Desktop, Claude Code, Cursor, Windsurf, ...) to run an LLM
-completion on the server's behalf, using the client's own subscription
-or credentials. This lets althing give first-time users a
+(e.g. Claude Desktop) to run an LLM completion on the server's behalf,
+using the client's own subscription or credentials.
+
+Sampling is deprecated as of MCP 2026-07-28 (SEP-2577) and Claude Code
+never implemented the client side. The subscription CLI providers
+(``claude-code:*`` / ``codex:*`` in
+:mod:`althing.llm.providers.subscription_cli`) are the forward-looking
+"run on the user's subscription" path; an explicit CLI model makes
+:func:`decide_mode` pick BYOK. This lets althing give first-time users a
 zero-configuration experience — no ``ANTHROPIC_API_KEY`` setup needed
 to fire their first prompt or quick poll.
 
@@ -196,6 +202,7 @@ def decide_mode(
     *,
     use_sampling: bool | None = None,
     env: dict[str, str] | None = None,
+    model: str | None = None,
 ) -> SamplingDecision:
     """Choose between sampling and BYOK for this tool call.
 
@@ -207,6 +214,9 @@ def decide_mode(
         env: Optional env dict for testing. When ``None`` both the
             process environment and the on-disk credential store are
             consulted via :func:`has_byok_credentials`.
+        model: The model the call will run on. A subscription CLI model
+            (``claude-code:*`` / ``codex:*``) needs no API key, so it
+            counts as available credentials in auto mode.
 
     Rules (in order):
         * ``use_sampling=True`` + client supports sampling → sampling.
@@ -216,11 +226,14 @@ def decide_mode(
         * Auto + no creds + client supports sampling → sampling.
         * Auto + no creds + no sampling → error (set an API key OR use
           a sampling-capable client).
-        * Auto + creds present → BYOK (preserves existing behaviour
-          and keeps ensemble / multi-provider features available).
+        * Auto + creds present (or a subscription CLI model) → BYOK
+          (preserves existing behaviour and keeps ensemble /
+          multi-provider features available).
     """
+    from althing.llm.providers.subscription_cli import is_subscription_cli_model
+
     supports = client_supports_sampling(ctx)
-    has_creds = has_byok_credentials(env)
+    has_creds = is_subscription_cli_model(model) or has_byok_credentials(env)
 
     if use_sampling is True:
         if supports:
@@ -229,10 +242,11 @@ def decide_mode(
             mode="error",
             error=(
                 "use_sampling=True was requested, but the invoking MCP "
-                "client did not advertise the 'sampling' capability. "
-                "Either run althing from a sampling-capable client "
-                "(Claude Desktop, Claude Code, Cursor, Windsurf) or set "
-                "a provider API key (e.g. ANTHROPIC_API_KEY) to use BYOK."
+                "client did not advertise the 'sampling' capability "
+                "(Claude Code does not support MCP sampling). Set a "
+                "provider API key (e.g. ANTHROPIC_API_KEY), or pass a "
+                "subscription CLI model such as model='claude-code:haiku' "
+                "to run on a signed-in Claude Code / Codex CLI."
             ),
         )
 
@@ -250,9 +264,11 @@ def decide_mode(
             "No provider credentials found (ANTHROPIC_API_KEY / "
             "OPENAI_API_KEY / XAI_API_KEY / GOOGLE_API_KEY / "
             "GEMINI_API_KEY / OPENROUTER_API_KEY) and the invoking "
-            "MCP client did not advertise 'sampling' capability. "
-            "Set a provider key in your environment, or run althing "
-            "from a sampling-capable client such as Claude Desktop. "
+            "MCP client did not advertise 'sampling' capability. Set a "
+            "provider key in your environment, pass a subscription CLI "
+            "model such as model='claude-code:haiku' to run on a "
+            "signed-in Claude Code / Codex CLI, or run althing from a "
+            "sampling-capable client (Claude Code is not one). "
             "See https://althing.dev/mcp#credentials."
         ),
     )
