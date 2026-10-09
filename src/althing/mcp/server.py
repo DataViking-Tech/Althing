@@ -1671,7 +1671,7 @@ async def run_prompt(
     if spec_error is not None:
         return spec_error
     model = model or _resolve_mcp_default_model()
-    decision = _decide_sampling_mode(ctx, use_sampling=use_sampling)
+    decision = _decide_sampling_mode(ctx, use_sampling=use_sampling, model=model)
     logger.info("run_prompt: mode=%s model=%s prompt_len=%d", decision.mode, model, len(prompt))
 
     if decision.mode == "error":
@@ -2112,7 +2112,7 @@ async def run_panel(
     # Ensemble mode is BYOK-only (sampling host exposes only one model),
     # so we only consult the decision in the non-ensemble branch.
     if not (models and len(models) >= 2):
-        decision = _decide_sampling_mode(ctx, use_sampling=use_sampling)
+        decision = _decide_sampling_mode(ctx, use_sampling=use_sampling, model=model)
         if decision.mode == "error":
             return json.dumps({"error": decision.error})
         if decision.mode == "sampling":
@@ -2508,7 +2508,7 @@ async def run_quick_poll(
     if not model_was_explicit:
         model = _resolve_mcp_default_model_for_panel(len(personas))
 
-    decision = _decide_sampling_mode(ctx, use_sampling=use_sampling)
+    decision = _decide_sampling_mode(ctx, use_sampling=use_sampling, model=model)
     logger.info("run_quick_poll: mode=%s model=%s personas=%d", decision.mode, model, len(personas))
 
     if decision.mode == "error":

@@ -16,6 +16,12 @@ from althing.llm.providers.base import LLMProvider, ProviderConfig
 from althing.llm.providers.gemini import GEMINI_CONFIG, GeminiProvider
 from althing.llm.providers.openai_compat import OPENAI_COMPAT_CONFIG, OpenAICompatibleProvider
 from althing.llm.providers.openrouter import OPENROUTER_CONFIG, OpenRouterProvider
+from althing.llm.providers.subscription_cli import (
+    CLAUDE_CODE_CONFIG,
+    CODEX_CONFIG,
+    ClaudeCodeProvider,
+    CodexProvider,
+)
 from althing.llm.providers.xai import XAI_CONFIG, XAIProvider
 from althing.llm.retry import (
     DEFAULT_INITIAL_BACKOFF as _DEFAULT_INITIAL_BACKOFF,
@@ -39,7 +45,12 @@ from althing.llm.retry import (
 logger = logging.getLogger(__name__)
 
 # Provider detection order (SPEC.md §2 — Provider Resolution).
+# Subscription CLI providers come first: ``claude-code:*`` would otherwise
+# match Anthropic's ``claude-`` prefix. They never satisfy the credential
+# fallback below, so they are only reachable by explicit prefix.
 _PROVIDER_REGISTRY: list[tuple[ProviderConfig, type[LLMProvider]]] = [
+    (CLAUDE_CODE_CONFIG, ClaudeCodeProvider),
+    (CODEX_CONFIG, CodexProvider),
     (ANTHROPIC_CONFIG, AnthropicProvider),
     (GEMINI_CONFIG, GeminiProvider),
     (XAI_CONFIG, XAIProvider),
@@ -152,7 +163,8 @@ class LLMClient:
         raise LLMError(
             "No LLM provider credentials found. Run `althing login` or set "
             "ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY, "
-            "or OPENAI_API_KEY.",
+            "or OPENAI_API_KEY — or use a subscription CLI model "
+            "(claude-code:<model> / codex:<model>).",
             LLMErrorCategory.MISSING_CREDENTIALS,
         )
 

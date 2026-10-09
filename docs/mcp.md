@@ -520,12 +520,17 @@ and `_resolve_mcp_default_model()` in `src/althing/mcp/server.py`.
 | no  | yes | (auto)  | **BYOK** |
 | no  | (any) | `true`  | **error** — host did not advertise `sampling` |
 | no  | (any) | `false` | **BYOK** — falls through to a missing-creds error if no key is set |
+| (any) | (any) | (auto), with `model="claude-code:*"` / `"codex:*"` | **BYOK** — the subscription CLI needs no key |
 
 "Provider key available" means any of `ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`, or
 `OPENROUTER_API_KEY` — checked first against the process environment,
 then against the on-disk credential store written by `althing login`
-(so MCP-launched subprocesses recognise keys the CLI can see).
+(so MCP-launched subprocesses recognise keys the CLI can see). An
+explicit subscription CLI model (`claude-code:<model>` /
+`codex:<model>`) counts as available credentials: it runs on the
+signed-in CLI and needs no key (see
+[Subscription CLI models](#subscription-cli-models)).
 
 The auto rule "local key wins over sampling" exists so users who *have*
 configured BYOK keep BYOK's full feature set (cross-provider ensembles,
@@ -588,6 +593,15 @@ failing.
 
 See [Model Resolution Order](#model-resolution-order) for the full
 configuration → mode matrix.
+
+> **Deprecated, and not available in Claude Code.** MCP 2026-07-28
+> deprecated sampling (SEP-2577) — it keeps working for at least twelve
+> months, with removal no earlier than the first revision after
+> 2027-07-28 — and **Claude Code has never implemented the client side**
+> ([anthropics/claude-code#1785](https://github.com/anthropics/claude-code/issues/1785)),
+> so sampling mode never activates under Claude Code. The
+> forward-looking way to run on a subscription is a
+> [subscription CLI model](#subscription-cli-models).
 
 ### Tradeoffs
 
@@ -668,6 +682,34 @@ at all, so the advertisement is gone. Whether sampling is used is
 decided per call by probing the client's declared `sampling` capability
 (from the `initialize` handshake on legacy connections, or the
 per-request `_meta` envelope on modern ones).
+
+## Subscription CLI models
+
+`claude-code:<model>` and `codex:<model>` route each completion through a
+locally installed, signed-in agent CLI in headless mode (`claude -p` /
+`codex exec`), drawing on your Claude or ChatGPT subscription instead of
+an API key. Unlike sampling it works under any MCP host (including
+Claude Code), on the CLI and SDK, and has no persona/question caps or
+structured-output restriction:
+
+```jsonc
+// run_quick_poll arguments
+{ "question": "...", "pack_id": "...", "model": "claude-code:haiku" }
+```
+
+Each call is an isolated, tool-less completion — the CLI's agent prompt
+is replaced by the persona prompt, tools / MCP servers / user settings
+are disabled, nothing is persisted, and the process runs in an empty
+scratch directory. The CLI must be installed and signed in on the
+machine running `althing mcp-serve`.
+
+Tradeoffs: no `temperature` / `top_p` / `seed` / `max_tokens` control,
+text-only content, throughput bounded by subscription usage limits
+(surfaced as rate limits), and cost figures that are API list-price
+estimates rather than bills. See the
+README's "Subscription CLI models" section for the environment knobs
+(`ALTHING_CLI_MAX_CONCURRENT`, `ALTHING_CLI_TIMEOUT`,
+`ALTHING_CLAUDE_CODE_ALLOW_API_KEY`, …).
 
 ## Host Integration Flags
 
@@ -784,9 +826,13 @@ Symptom: tool calls return `MISSING_CREDS` or a provider-specific
 - Run `althing login` to seed the on-disk credential store; the MCP
   server reads from there as a fallback when the env is empty (see
   [Model Resolution Order](#model-resolution-order)).
-- If your host advertises MCP `sampling` (Claude Desktop, Claude Code,
-  Cursor, Windsurf), you can omit the key entirely and althing will
-  borrow the host's LLM access — see [Sampling Mode](#sampling-mode).
+- To run without a key, pass a subscription CLI model
+  (`model="claude-code:haiku"` or `"codex:"`) — it uses the signed-in
+  CLI on the server machine; see
+  [Subscription CLI models](#subscription-cli-models). If your host
+  advertises MCP `sampling` (**not** Claude Code), you can also omit
+  the key and althing will borrow the host's LLM access — see
+  [Sampling Mode](#sampling-mode).
 
 ### Timeouts on long panel runs
 

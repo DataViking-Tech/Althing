@@ -246,7 +246,14 @@ def _resolve_context_window(model: str | None) -> tuple[int, bool]:
     # "haiku" doesn't falsely pick the default window.
     try:
         from althing.llm.aliases import resolve_alias
+        from althing.llm.providers.subscription_cli import SUBSCRIPTION_CLI_PREFIXES
 
+        # Subscription CLI models ("claude-code:haiku") size like the model
+        # they wrap.
+        for cli_prefix in SUBSCRIPTION_CLI_PREFIXES:
+            if model.startswith(cli_prefix):
+                model = model[len(cli_prefix) :]
+                break
         resolved = resolve_alias(model)
     except Exception:
         resolved = model

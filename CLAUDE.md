@@ -92,6 +92,12 @@ Set the appropriate environment variable:
 | OpenAI | `OPENAI_API_KEY` | (must specify --model) |
 | xAI | `XAI_API_KEY` | grok-3 |
 | Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | gemini-2.5-flash |
+| Claude Code CLI | none (signed-in `claude`) | explicit only: `claude-code:<model>` |
+| Codex CLI | none (signed-in `codex`) | explicit only: `codex:<model>` |
+
+Subscription CLI providers live in `llm/providers/subscription_cli.py` and
+register *before* Anthropic in `_PROVIDER_REGISTRY` (`claude-code:` would
+otherwise match `claude-`). They never satisfy the credential fallback.
 
 ## YAML Formats
 
