@@ -74,6 +74,18 @@ For auto-generated release notes, see [GitHub Releases](https://github.com/DataV
 
 ### Added
 
+- **Population packs and `althing.population`.** A population pack is a
+  persona pack whose personas carry structured attributes (`country`).
+  The bundled `global-respondents` pack has one minimal respondent persona
+  per country (107 countries). `allocate_population` splits a sample budget
+  across population members, weighting repeated members, deterministically
+  per seed; `filter_personas` narrows a pack by attribute.
+  `althing panel run --population "country=France,Japan"` filters a panel.
+  `country`, `gender`, and `region` persona attributes are now stated in
+  the persona system prompt (no bundled pack set them before, so existing
+  prompts are unchanged). Used by SynthBench's `--persona-pack` option for
+  GlobalOpinionQA.
+
 - **Subscription CLI providers: `claude-code:<model>` and `codex:<model>`.**
   Completions can now run through a locally installed, signed-in Claude
   Code (`claude -p`) or Codex (`codex exec`) CLI, drawing on the user's

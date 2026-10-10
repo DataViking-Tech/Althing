@@ -783,7 +783,7 @@ searching for one:
   become resolvable by name like a builtin. See [docs/registry.md](docs/registry.md)
   for URI forms, verification, offline cache, and the submission flow.
 
-### Builtin persona packs (14, 232 personas total)
+### Builtin persona packs (15, 339 personas total)
 
 | Pack | Personas |
 |------|----------|
@@ -793,6 +793,7 @@ searching for one:
 | `enterprise-ai-buyers` | 18 |
 | `enterprise-buyer` | 15 |
 | `general-consumer` | 15 |
+| `global-respondents` | 107 (population pack, one per country) |
 | `healthcare-patient` | 15 |
 | `job-seekers` | 15 |
 | `market-research-critics` | 16 |
@@ -806,6 +807,29 @@ searching for one:
 user-saved packs. Picking the right pack for your task?
 See [docs/task-recommendations.md](docs/task-recommendations.md) for the
 task → pack → model-config matrix with copy/paste commands.
+
+### Population packs
+
+A population pack is a persona pack whose personas carry structured
+attributes such as `country`. `global-respondents` has one minimal
+respondent persona per country (107 countries, plain names) and no other
+demographics.
+
+Narrow a panel to part of the population:
+
+```bash
+althing panel run --personas global-respondents --population "country=France,Japan" --instrument survey.yaml
+```
+
+Benchmarks use `althing.population.allocate_population` to split a sample
+budget across a list of population members. Each member gets an equal
+share and a member listed twice gets twice the share, so the pooled
+answers match a ground truth that averages over those groups. SynthBench's
+`--persona-pack global-respondents` uses this for GlobalOpinionQA, where
+each question's target is the average over the countries that answered it.
+
+`country`, `gender`, and `region` attributes are stated in the persona's
+system prompt.
 
 ### Builtin instrument packs (8, all v3 branching)
 

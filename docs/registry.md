@@ -7,9 +7,10 @@ to find one:
 
 - **Builtin packs** ship inside the `althing` wheel. They are resolvable by
   name the moment `pip install althing` finishes — no `pack import`, no
-  network, no registry lookup. The SDK currently bundles **14 persona packs**
-  (232 personas total: `ai-eval-buyers`, `broad-professionals`, `developer`,
+  network, no registry lookup. The SDK currently bundles **15 persona packs**
+  (339 personas total: `ai-eval-buyers`, `broad-professionals`, `developer`,
   `enterprise-ai-buyers`, `enterprise-buyer`, `general-consumer`,
+  `global-respondents`,
   `healthcare-patient`, `job-seekers`, `market-research-critics`,
   `product-research`, `recruiters-talent`, `skeptical-executives`,
   `startup-founder`, `students`) and **8 v3 branching

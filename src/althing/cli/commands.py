@@ -1523,6 +1523,18 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
             ]
         personas = merged
 
+    # --population narrows the panel to personas matching attribute values
+    # (population packs such as global-respondents; see althing.population).
+    population_spec = getattr(args, "population", None)
+    if population_spec:
+        from althing.population import PopulationError, filter_personas, parse_population
+
+        try:
+            personas = filter_personas(personas, parse_population(population_spec))
+        except PopulationError as exc:
+            print(f"Error: --population: {exc}", file=sys.stderr)
+            return 1
+
     # synthbench#261 / sy-2ag: when --model was NOT given and the
     # auto-resolved default is a known-slow router (openrouter/auto), a
     # ≥10-persona panel can hang for many minutes. Swap the default for a

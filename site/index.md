@@ -1,6 +1,6 @@
 # althing — Run synthetic focus groups with any LLM
 
- v1.7.0 — public beta
+ v1.8.0 — public beta
 
 # althing
 

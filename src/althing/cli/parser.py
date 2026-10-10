@@ -147,6 +147,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     panel_run_parser.add_argument(
+        "--population",
+        default=None,
+        metavar="KEY=VALUES",
+        help=(
+            "Keep only personas whose attributes match, e.g. "
+            "'country=France,Japan' or 'country=Brazil;gender=female'. "
+            "Use with a population pack such as global-respondents."
+        ),
+    )
+    panel_run_parser.add_argument(
         "--personas-merge",
         dest="personas_merge",
         action="append",
