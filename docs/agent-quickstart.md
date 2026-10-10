@@ -132,7 +132,7 @@ them with `--personas-merge` (duplicate names are de-duped, later file wins, and
 a warning names every drop):
 
 ```bash
-althing pack list                                   # 14 bundled packs, with counts
+althing pack list                                   # 15 bundled packs, with counts
 althing pack export product-research -o pr.yaml     # 20 personas
 althing pack export broad-professionals -o bp.yaml  # 20 personas
 

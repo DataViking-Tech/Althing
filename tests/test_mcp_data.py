@@ -50,7 +50,8 @@ class TestPersonaPacks:
         # imposed by the original five packs. sp-b8y47x added students.
         # sy-a0i / gh-476 added four canonical packs for common agent
         # research jobs (skeptical-executives, market-research-critics,
-        # broad-professionals, enterprise-ai-buyers).
+        # broad-professionals, enterprise-ai-buyers). global-respondents is
+        # the first population pack (althing.population).
         assert names == {
             "developer",
             "enterprise-buyer",
@@ -66,8 +67,9 @@ class TestPersonaPacks:
             "market-research-critics",
             "broad-professionals",
             "enterprise-ai-buyers",
+            "global-respondents",
         }
-        assert len(builtin) == 14
+        assert len(builtin) == 15
 
     def test_sp_6wbm_scaleup_packs_load(self):
         """sp-6wbm: each new scale-up pack loads, has a non-empty

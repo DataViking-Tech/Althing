@@ -66,6 +66,10 @@ def persona_system_prompt(persona: dict[str, Any]) -> str:
     parts = [f"You are role-playing as {persona.get('name', 'an anonymous person')}."]
     if persona.get("age"):
         parts.append(f"Age: {persona['age']}.")
+    # Demographic attributes used by population packs (althing.population).
+    for key in ("gender", "country", "region"):
+        if persona.get(key):
+            parts.append(f"{key.capitalize()}: {persona[key]}.")
     if persona.get("occupation"):
         parts.append(f"Occupation: {persona['occupation']}.")
     if persona.get("background"):
