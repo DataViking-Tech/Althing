@@ -3,7 +3,7 @@
   "name": "io.github.DataViking-Tech/althing",
   "title": "Althing",
   "description": "Run synthetic focus groups using AI personas. 12 MCP tools for single prompts, full panel runs, and v3 branching (adaptive) instruments across any LLM provider (Claude, OpenAI, Gemini, xAI).",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "repository": {
     "url": "https://github.com/DataViking-Tech/Althing",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "althing",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {
