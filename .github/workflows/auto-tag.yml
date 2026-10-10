@@ -170,7 +170,8 @@ jobs:
 
       # Mint a token for the org-owned `dataviking-release-bot` App. The App is
       # an Integration bypass actor on the main branch ruleset (see
-      # dataviking-infra althing.tf), so pushing the bump commit AS the App
+      # dataviking-infra terraform/repos/synthpanel.tf, which still manages this
+      # repo under its pre-rename name), so pushing the bump commit AS the App
       # is allowed — whereas a github-actions[bot] / GITHUB_TOKEN push to main
       # is rejected with GH013. This removed the manual "pre-bump the version in
       # the PR" workaround (the escape-hatch branch below still works if a PR
