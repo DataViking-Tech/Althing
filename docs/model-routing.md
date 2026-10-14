@@ -28,7 +28,9 @@ filtered with `--population country=France,Japan` asking about the
 economy gets:
 
 ```
-model routing: The Economy and work route for Respondents outside the US is not confident (n=6) and the all-topics route for Respondents outside the US is not confident (n=100), so this run uses the default model openrouter/anthropic/claude-haiku-4.5.
+model routing: openrouter/anthropic/claude-haiku-4.5 (33%), openrouter/google/gemini-2.5-flash-lite (33%), openrouter/openai/gpt-4o-mini (33%)
+model routing: slice=cross-national topic=economy confident=false source=live
+model routing: The Economy and work route for Respondents outside the US is not confident (n=6) and the all-topics route for Respondents outside the US is not confident (n=100), so this uses Ensemble: Haiku 4.5, Gemini 2.5 Flash-Lite, GPT-4o mini (Althing), the top Althing-conditioned blend for Respondents outside the US on all topics (SynthBench index 16.2, 100 questions), though its lead over the next system is not clear.
 ```
 
 The same decision is saved in the run's JSON output under
@@ -116,7 +118,13 @@ clear in a bootstrap test. Althing falls back in this order:
 
 1. The route for the slice and topic, if it is confident.
 2. The slice's `all` route, if it is confident.
-3. The default model you would have got without `--model auto`.
+3. The top system on the slice's `all` route, even though its lead is not
+   clear. Not confident means the best system and the runner-up are close,
+   not that the best one is poor, so this is still a better guess than a
+   default model that SynthBench ranks lower or never tested. The
+   decision then has `confident: false`.
+4. The default model you would have got without `--model auto`, only when
+   there is no routing data for the slice or none of the members can run.
 
 The reason line says which step was used and why.
 
@@ -169,8 +177,8 @@ model before any spend. Pass `--skip-preflight` to skip it.
 | `slice` | The slice used |
 | `topic` | The topic used for the lookup (`all` when there was no clear majority) |
 | `route_topic` | The topic of the route actually used (`all` after a fallback) |
-| `confident` | Whether the route used was confident (`false` when the default model was used) |
-| `fallback` | `none`, `slice-all` or `default` |
+| `confident` | Whether the route used was confident (`false` for `slice-top` and `default`) |
+| `fallback` | `none`, `slice-all`, `slice-top` or `default` |
 | `source` | `live`, `cache`, `stale-cache`, `bundled-snapshot` or `unavailable` |
 | `config_id`, `label`, `index`, `n_questions` | The SynthBench system chosen and its score |
 | `dropped` | Members that could not run here, with the reason |

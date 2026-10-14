@@ -277,9 +277,37 @@ def test_missing_topic_route_falls_back_to_slice_all() -> None:
     assert "no route" in d.reason
 
 
-def test_unconfident_slice_all_falls_back_to_default() -> None:
+def test_unconfident_slice_all_uses_slice_top_scorer() -> None:
+    # No clear lead is still better evidence than a default model SynthBench
+    # ranks lower, so the slice's top Althing candidate is used, unconfirmed.
     d = _route_with(population="age=18-29", topic="all")
     assert d.slice == "us-subgroups"
+    assert d.fallback == "slice-top"
+    assert d.model == "openrouter/qwen/qwen3.8-flash"
+    assert d.confident is False
+    assert d.config_id == QWEN["config_id"]
+    assert "not confident" in d.reason
+    assert "lead over the next system is not clear" in d.reason
+
+
+def test_unconfident_topic_and_slice_all_names_both_routes() -> None:
+    d = _route_with(population="age=18-29", topic="politics")
+    assert d.fallback == "slice-top"
+    assert d.route_topic == "all"
+    assert "Politics and policy route" in d.reason or "no route" in d.reason
+    assert "all-topics route" in d.reason
+
+
+def test_slice_without_routes_falls_back_to_default() -> None:
+    routing = dict(ROUTING, routes=[r for r in ROUTING["routes"] if r["slice"] != "us-subgroups"])
+    d = route_models(
+        population="age=18-29",
+        topic="all",
+        routing=routing,
+        source="live",
+        default_model="haiku",
+        has_credential=OR_ONLY,
+    )
     assert d.fallback == "default"
     assert d.model == "haiku"
     assert d.confident is False
@@ -806,7 +834,7 @@ class TestMcpModelAuto:
         data = json.loads(result.content[0].text)
         routing = data["model_routing"]
         assert routing["slice"] == "us-subgroups"
-        assert routing["fallback"] == "default"
+        assert routing["fallback"] == "slice-top"
         assert mock_run.call_args[0][2] == routing["model"]
 
     @pytest.mark.asyncio

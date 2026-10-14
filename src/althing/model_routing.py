@@ -20,7 +20,10 @@ The policy, in order:
 3. **Selection.** The route for (slice, topic) supplies ``best_althing``,
    the best Althing-conditioned config. When that route is not
    ``confident`` (or missing), the slice's ``all`` route is used; when that
-   is not confident either, the caller's default model is used. Members
+   is not confident either, its top Althing-conditioned candidate is still
+   used (``confident=False``, ``fallback="slice-top"``), because a default
+   model SynthBench ranks lower is not a better guess. The caller's default
+   model is used only when there is no routing data or nothing can run. Members
    that cannot run here (no mapping, or no credentials for their provider)
    are dropped; a blend that loses members is renormalized, and a blend
    left with one member becomes a single model.
@@ -137,7 +140,9 @@ class RouteDecision:
     ``None`` when the default model was used."""
     fallback: str = "none"
     """``none`` (the requested route was used), ``slice-all`` (the slice's
-    all-topics route was used) or ``default`` (the default model was used)."""
+    confident all-topics route was used), ``slice-top`` (the top candidate
+    of the slice's all-topics route, without a clear lead) or ``default``
+    (the default model was used)."""
     config_id: str | None = None
     label: str | None = None
     index: float | None = None
@@ -527,7 +532,8 @@ def route_models(
         allow_blend: When ``False``, use ``best_single_althing`` so the
             result is always one model.
         max_members: Cap on blend members (highest weights kept).
-        default_model: Model used when no confident route applies. Callers
+        default_model: Model used when there is no routing data for the
+            slice or none of the chosen members can run. Callers
             pass their own surface default (CLI / MCP / SDK).
         routing: A pre-loaded routing.json document (tests / callers that
             already hold one). Loaded via :func:`synthbench.load_routing`
@@ -590,19 +596,30 @@ def route_models(
     if not isinstance(routing, dict):
         return _default("SynthBench routing data is unavailable")
 
-    levels: list[tuple[str, str]] = []
+    # (fallback label, route topic, route must be confident). The last level
+    # takes the slice's top scorer even without a clear lead: it still beats
+    # a default model that SynthBench ranks lower or never measured.
+    levels: list[tuple[str, str, bool]] = []
     if topic_id != TOPIC_ALL:
-        levels.append(("none", topic_id))
-    levels.append(("slice-all" if topic_id != TOPIC_ALL else "none", TOPIC_ALL))
+        levels.append(("none", topic_id, True))
+    levels.append(("slice-all" if topic_id != TOPIC_ALL else "none", TOPIC_ALL, True))
+    levels.append(("slice-top", TOPIC_ALL, False))
 
     problems: list[str] = []
     all_dropped: list[str] = []
-    for fallback, route_topic in levels:
+    for fallback, route_topic, need_confident in levels:
         topic_label = _topic_label(routing, route_topic)
         route = _find_route(routing, slice_id, route_topic)
-        if route is None or route.get("confident") is not True:
+        if route is None:
+            if need_confident:
+                problems.append(_route_problem(route, slice_label, topic_label))
+            continue
+        confident = route.get("confident") is True
+        if need_confident and not confident:
             problems.append(_route_problem(route, slice_label, topic_label))
             continue
+        if not need_confident and confident:
+            continue  # already tried as a confident route above
         pick_key = "best_althing" if allow_blend else "best_single_althing"
         candidate = _find_candidate(route, route.get(pick_key))
         if candidate is None:
@@ -627,12 +644,15 @@ def route_models(
             evidence.append(f"{n_q} questions")
         evidence_part = f" ({', '.join(evidence)})" if evidence else ""
         kind = "blend" if len(spec) > 1 else "model"
-        lead = f"{_cap(problems[-1])}, so " if problems else ""
+        why = f"{problems[0]} and {problems[-1]}" if len(problems) > 1 else (problems[0] if problems else "")
+        lead = f"{_cap(why)}, so " if why else ""
         pick = (
             f"{label} is the top Althing-conditioned {kind} for {slice_label} on {topic_label}{evidence_part}"
             if not problems
             else f"this uses {label}, the top Althing-conditioned {kind} for {slice_label} on all topics{evidence_part}"
         )
+        if not confident:
+            pick += ", though its lead over the next system is not clear"
         drop_part = f"; dropped {', '.join(dropped)}" if dropped else ""
         reason = f"{lead}{pick}{drop_part}."
         return RouteDecision(
@@ -640,7 +660,7 @@ def route_models(
             model_spec=spec if len(spec) > 1 else None,
             slice=slice_id,
             topic=topic_id,
-            confident=True,
+            confident=confident,
             source=source,
             reason=_cap(reason),
             route_topic=route_topic,

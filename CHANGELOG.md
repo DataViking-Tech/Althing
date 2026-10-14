@@ -15,7 +15,9 @@ For auto-generated release notes, see [GitHub Releases](https://github.com/DataV
   `--population` and the persona pack, the topic from the question text
   (keyword match on whole words), and the pick is the best
   Althing-conditioned system for that pair. Weak evidence falls back to the
-  slice's all-topics route, then to the default model. Blends run as a
+  slice's all-topics route, then to that route's top system without a
+  clear lead (`confident: false`); the default model is used only when
+  there is no routing data or nothing can run. Blends run as a
   weighted per-persona split, so they also work on multi-round instruments.
   New `--use-case` / `--topic` (CLI) and `use_case` / `topic` (MCP, SDK)
   override the inference. The decision (models, weights, slice, topic,
