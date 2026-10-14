@@ -213,7 +213,13 @@ jobs:
             VERSION="${NEW_TAG#v}"
             git commit -m "chore(release): sync __version__.py + rendered artifacts to ${VERSION} (PR #${PR_NUMBER}) (sy-hs4)"
             # Push as the release-bot App (Integration bypass actor on main).
-            git push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+            # actions/checkout persists GITHUB_TOKEN as an Authorization
+            # extraheader, which git sends instead of the URL credentials, so
+            # without the reset this push went out as github-actions[bot] and
+            # hit GH013 (v1.9.0, PR #597). An empty value clears the header
+            # for this push only; the tag push below still uses GITHUB_TOKEN.
+            git -c http.https://github.com/.extraheader= \
+              push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
           fi
 
       - name: Create and push tag
