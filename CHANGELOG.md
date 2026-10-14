@@ -6,7 +6,48 @@ For auto-generated release notes, see [GitHub Releases](https://github.com/DataV
 
 ## [Unreleased]
 
+### Added
+
+- **Auto model routing (`--model auto`).** `althing panel run --model auto`,
+  MCP `run_panel` / `run_quick_poll` with `model="auto"`, and the SDK's
+  `run_panel(model="auto")` pick a model or weighted blend from SynthBench's
+  `routing.json`. The respondent group (slice) is inferred from
+  `--population` and the persona pack, the topic from the question text
+  (keyword match on whole words), and the pick is the best
+  Althing-conditioned system for that pair. Weak evidence falls back to the
+  slice's all-topics route, then to the default model. Blends run as a
+  weighted per-persona split, so they also work on multi-round instruments.
+  New `--use-case` / `--topic` (CLI) and `use_case` / `topic` (MCP, SDK)
+  override the inference. The decision (models, weights, slice, topic,
+  confident, source, reason) is printed to stderr and recorded under
+  `metadata.model_routing` (MCP: `model_routing` in the response). Shared
+  policy in `althing.model_routing`; see `docs/model-routing.md`.
+- `althing.synthbench.load_routing()` fetches `routing.json` with the same
+  cache / ETag / offline / bundled-snapshot handling as the leaderboard
+  (cache `synthbench-routing-cache.json`, override
+  `ALTHING_SYNTHBENCH_ROUTING_URL`, bundled
+  `data/synthbench-routing-snapshot.json`).
+- `recommend()` is blend-aware: ensemble rows carry `members` (model, model
+  id, framework, weight) and `model_spec()`.
+
 ### Changed
+
+- SynthBench `model_id`s now map to runnable models as
+  `openrouter/<model_id>`, or to a direct provider id when Althing has an
+  alias for it and the provider key is set. Previously `--best-model-for`
+  could stamp a bare `google/...` id that no provider would accept.
+- `recommend()` skips baseline rows.
+- The bundled leaderboard snapshot is refreshed from the live leaderboard
+  (2026-10-14) and trimmed to the fields the reader uses.
+- `assign_models_to_personas` moved to `althing.model_split` (still
+  importable from `althing.cli.commands`).
+- Docs: the weighted `--models` split is documented as largest remainder
+  with at least one persona per model (it was described as "last model
+  absorbs the remainder"); model-pack examples no longer pair `--blend`
+  with multi-round instruments, and no longer claim MCP returns a `blend`
+  block or a blend `convergence` score; removed a nonexistent `--topic`
+  example from the SynthBench submit docs; April-era model claims replaced
+  with pointers to live data.
 
 - **MCP server upgraded to the Python SDK 2.0 / protocol revision
   2026-07-28.** The `mcp` extra now pins `mcp>=2.0,<3` and the server

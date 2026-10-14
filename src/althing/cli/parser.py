@@ -122,7 +122,33 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "LLM model to use (same as the global --model, accepted here "
             "so the flag may follow the subcommand; this position wins "
-            "when both are given)."
+            "when both are given). Pass 'auto' to pick the model, or a "
+            "weighted blend, from SynthBench routing data for this panel's "
+            "population and question topic (see --use-case, --topic and "
+            "docs/model-routing.md)."
+        ),
+    )
+    panel_run_parser.add_argument(
+        "--use-case",
+        dest="use_case",
+        default=None,
+        metavar="SLICE",
+        help=(
+            "With --model auto: the respondent group to route for, one of "
+            "us-general, us-subgroups, cross-national. Default: inferred "
+            "from --population and the persona pack."
+        ),
+    )
+    panel_run_parser.add_argument(
+        "--topic",
+        dest="routing_topic",
+        default=None,
+        metavar="TOPIC",
+        help=(
+            "With --model auto: the question topic to route for, one of "
+            "politics, economy, technology, science-health, identity, "
+            "society, global, or 'all'. Default: inferred from the "
+            "instrument's question text."
         ),
     )
     panel_run_parser.add_argument(
@@ -200,9 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Multi-model spec. Two shapes: "
             "(1) **Weighted per-persona** — 'haiku:0.5,gemini:0.5' splits the "
-            "panel across models in list order; 6 personas at 0.5/0.5 → 3/3, "
-            "7 personas at 0.5/0.5 → 3/4 (the last model absorbs the "
-            "remainder). Weights are normalized, so 'a:2,b:3' and "
+            "panel across models by largest remainder: each model gets the "
+            "whole part of weight x personas, leftover personas go to the "
+            "largest fractional parts (ties to the earlier model), and every "
+            "model gets at least one persona when there are enough. 6 "
+            "personas at 0.5/0.5 → 3/3; 7 personas at 0.5/0.5 → 4/3. "
+            "Weights are normalized, so 'a:2,b:3' and "
             "'a:0.4,b:0.6' behave the same. Weights summing far from 1.0 "
             "emit a warning. Assignment is fully deterministic (same "
             "personas+spec → same split) and printed before the run. "
@@ -417,7 +446,9 @@ def build_parser() -> argparse.ArgumentParser:
             "via --models. Runs each model on the full panel, then computes "
             "weighted-average response distributions across models for each "
             "question. Weights are taken from the --models spec (e.g. "
-            "'haiku:0.5,gemini:0.5'). Requires --models."
+            "'haiku:0.5,gemini:0.5'). Requires --models, or --model auto "
+            "when routing picks a blend. Not available for multi-round "
+            "instruments."
         ),
     )
     panel_run_parser.add_argument(
@@ -709,10 +740,13 @@ def build_parser() -> argparse.ArgumentParser:
             "dataset). Pass ':DATASET' with empty topic to rank by SPS "
             "across a dataset instead. A recommendation line is printed to "
             "stderr before the run. Overrides --model when present; "
-            "mutually exclusive with --models. Respects "
-            "ALTHING_SYNTHBENCH_OFFLINE / _REFRESH / _URL env vars. The "
-            "leaderboard is cached for 24h at "
-            "~/.althing/synthbench-cache.json."
+            "mutually exclusive with --models and --model auto. When the "
+            "top entry is a blend, its first runnable member is used. "
+            "Respects ALTHING_SYNTHBENCH_OFFLINE / _REFRESH / _URL env "
+            "vars. The leaderboard is cached for 24h at "
+            "~/.althing/synthbench-cache.json. For routing by respondent "
+            "group and question topic, including blends, use --model auto "
+            "instead."
         ),
     )
     panel_run_parser.add_argument(

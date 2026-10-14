@@ -120,5 +120,5 @@ def test_display_label_with_model_id_is_stamped_end_to_end(
     )
     args = argparse.Namespace(model="openrouter/auto")
     picked = _apply_best_model_for(args, "Technology & Digital Life:globalopinionqa")
-    assert picked == "google/gemini-2.5-flash-lite"
-    assert args.model == "google/gemini-2.5-flash-lite"
+    assert picked == "openrouter/google/gemini-2.5-flash-lite"
+    assert args.model == "openrouter/google/gemini-2.5-flash-lite"

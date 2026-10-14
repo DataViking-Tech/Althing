@@ -35,6 +35,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from althing import model_routing as _model_routing
 from althing._runners import (
     MAX_PERSONAS,
     MAX_QUESTIONS,
@@ -933,6 +934,8 @@ def run_panel(
     extract_schema: type[BaseModel] | str | dict[str, Any] | None = None,
     synthesis_temperature: float | None = None,
     variants: int = 0,
+    use_case: str | None = None,
+    topic: str | None = None,
 ) -> PanelResult:
     """Run a full synthetic focus group panel.
 
@@ -957,7 +960,11 @@ def run_panel(
             precedence over both ``instrument`` and ``questions``.
         pack_id: Persona pack name. Merged after inline ``personas``.
         model: Model alias for panelist responses. Defaults per
-            environment.
+            environment. Pass ``"auto"`` to pick the model, or a weighted
+            blend, from SynthBench routing data for this panel's
+            respondent group and question topic. A blend runs as a
+            per-persona split; the decision is recorded in
+            ``metadata["model_routing"]``. See docs/model-routing.md.
         response_schema: JSON Schema for structured per-persona output.
         synthesis: Run the synthesis step. Default ``True``.
         synthesis_model: Override the synthesis-step model.
@@ -986,6 +993,13 @@ def run_panel(
         variants: Number of persona variants per base persona. ``0``
             disables the robustness path. ``1..20`` generates variants
             and computes robustness scores in the result.
+        use_case: Only with ``model="auto"``. Respondent group to route
+            for (``us-general``, ``us-subgroups``, ``cross-national``).
+            Default: inferred from ``pack_id``.
+        topic: Only with ``model="auto"``. Question topic to route for
+            (``politics``, ``economy``, ``technology``, ``science-health``,
+            ``identity``, ``society``, ``global`` or ``all``). Default:
+            inferred from the question text.
 
     Returns:
         :class:`PanelResult` — rounds, routing path, synthesis, cost.
@@ -1019,8 +1033,16 @@ def run_panel(
     """
     if variants < 0 or variants > 20:
         raise ValueError("variants must be between 0 and 20.")
+    auto_routing = _model_routing.is_auto_model(model)
+    if auto_routing and persona_models:
+        raise ValueError("model='auto' picks the per-persona split itself; drop persona_models or pass a model.")
+    if not auto_routing and (use_case is not None or topic is not None):
+        raise ValueError("use_case and topic only apply with model='auto'.")
     merged = _resolve_personas(personas, pack_id)
-    if model is None:
+    if auto_routing:
+        # Fallback default for routing; routing reports when it is used.
+        model, _swapped = _fast_default.fast_default_for_panel(_default_model(), len(merged))
+    elif model is None:
         model = _default_model_for_panel(len(merged))
 
     resolved_extract_schema = resolve_extract_schema(extract_schema)
@@ -1034,6 +1056,25 @@ def run_panel(
     elif instrument is not None:
         raw = instrument.get("instrument", instrument)
         instrument_obj = parse_instrument(raw)
+
+    route_decision: _model_routing.RouteDecision | None = None
+    if auto_routing:
+        if instrument_obj is not None:
+            routing_questions: list[Any] = [q for rnd in instrument_obj.rounds for q in rnd.questions]
+        else:
+            routing_questions = _coerce_questions(questions) if questions else []
+        route_decision = _model_routing.route_models(
+            questions=routing_questions,
+            persona_pack=pack_id,
+            use_case=use_case,
+            topic=topic,
+            default_model=model,
+            warn=lambda msg: logger.warning("%s", msg),
+        )
+        model, persona_models, split_warnings = _model_routing.apply_decision_to_personas(route_decision, merged)
+        for w in split_warnings:
+            logger.warning("model routing: %s", w)
+        logger.info("model routing: %s", route_decision.reason)
 
     client = _get_client()
 
@@ -1104,6 +1145,8 @@ def run_panel(
             timer=timer,
             panelist_per_model=panelist_per_model_meta,
         )
+        if route_decision is not None:
+            metadata["model_routing"] = route_decision.to_dict()
 
         # Flat results for persistence — take the terminal round's panelist list.
         from althing._runners import format_panelist_result
@@ -1218,6 +1261,8 @@ def run_panel(
         timer=timer,
         panelist_per_model=panelist_per_model_meta,
     )
+    if route_decision is not None:
+        metadata["model_routing"] = route_decision.to_dict()
 
     variant_count = variant_data["variant_count"] if variant_data else 0
     # hq-hjk8: same CAS extraction for the flat-questions path. No

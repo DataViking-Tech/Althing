@@ -25,12 +25,24 @@ install even while ``synthbench.org/data/leaderboard.json`` is 404'ing
 (GH #494). The warning message that surfaces this includes the
 ``ALTHING_SYNTHBENCH_URL`` override so users with a working internal
 mirror have a clear path forward.
+
+:func:`load_routing` reads SynthBench's ``routing.json`` (used by
+``--model auto``, see :mod:`althing.model_routing`) with the same
+machinery: its own cache file (``synthbench-routing-cache.json``), its
+own URL override (``ALTHING_SYNTHBENCH_ROUTING_URL``) and its own bundled
+snapshot (``data/synthbench-routing-snapshot.json``).
+
+Leaderboard ``model_id`` values (``qwen/qwen3.8-flash``) map to runnable
+Althing models via :func:`runnable_model_for`: ``openrouter/<model_id>``,
+or a direct provider id when Althing has an alias for it and the user has
+that provider's credentials.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -42,6 +54,9 @@ import httpx
 
 DEFAULT_SYNTHBENCH_URL = "https://synthbench.org/data/leaderboard.json"
 SYNTHBENCH_URL_ENV = "ALTHING_SYNTHBENCH_URL"
+DEFAULT_ROUTING_URL = "https://synthbench.org/data/routing.json"
+ROUTING_URL_ENV = "ALTHING_SYNTHBENCH_ROUTING_URL"
+ROUTING_CACHE_FILENAME = "synthbench-routing-cache.json"
 SYNTHBENCH_OFFLINE_ENV = "ALTHING_SYNTHBENCH_OFFLINE"
 SYNTHBENCH_REFRESH_ENV = "ALTHING_SYNTHBENCH_REFRESH"
 DATA_DIR_ENV = "SYNTH_PANEL_DATA_DIR"
@@ -58,6 +73,7 @@ MIN_RUN_COUNT = 3
 # or run from a source checkout. The ``data/`` subpackage is declared
 # in pyproject.toml's ``[tool.setuptools.package-data]`` block.
 _BUNDLED_SNAPSHOT_PATH = Path(__file__).resolve().parent / "data" / "synthbench-snapshot.json"
+_BUNDLED_ROUTING_SNAPSHOT_PATH = Path(__file__).resolve().parent / "data" / "synthbench-routing-snapshot.json"
 
 WarnFn = Callable[[str], None]
 
@@ -72,6 +88,29 @@ class CachedLeaderboard:
     source_url: str
     etag: str | None
     leaderboard: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RecommendedMember:
+    """One member of a blended (ensemble) recommendation."""
+
+    model: str
+    """Runnable Althing model string (``openrouter/<model_id>`` or a direct alias)."""
+    model_id: str
+    """The upstream SynthBench ``model_id`` (e.g. ``qwen/qwen3.8-flash``)."""
+    framework: str | None
+    """``product`` (Althing persona conditioning) or ``raw`` (raw prompt)."""
+    weight: float
+    runnable: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "model_id": self.model_id,
+            "framework": self.framework,
+            "weight": round(self.weight, 6),
+            "runnable": self.runnable,
+        }
 
 
 @dataclass(frozen=True)
@@ -117,6 +156,27 @@ class Recommendation:
     the package release date and predates any post-release leaderboard
     movement. See ``docs/recommended-models.md`` for the full table.
     """
+    members: tuple[RecommendedMember, ...] = ()
+    """Blend members when the top entry is an ensemble row.
+
+    Built from the row's ``ensemble_members`` (equal weights unless the
+    row records weights; weights sum to 1). Empty for single-model rows.
+    :attr:`model` is the first runnable member so callers that only take
+    one model keep working; pass :meth:`model_spec` to a weighted
+    per-persona split to run the whole blend.
+    """
+
+    def model_spec(self) -> list[tuple[str, float]]:
+        """Return ``[(model, weight)]`` for the runnable members.
+
+        For a single-model recommendation this is ``[(model, 1.0)]``.
+        Weights of the runnable members are renormalized to sum to 1.
+        """
+        usable = [m for m in self.members if m.runnable]
+        if not usable:
+            return [(self.model, 1.0)]
+        total = sum(m.weight for m in usable) or 1.0
+        return [(m.model, m.weight / total) for m in usable]
 
     def format_line(self) -> str:
         """Render a one-line summary suitable for stderr."""
@@ -151,6 +211,14 @@ def cache_path() -> Path:
     return _data_dir() / CACHE_FILENAME
 
 
+def routing_url() -> str:
+    return os.environ.get(ROUTING_URL_ENV, DEFAULT_ROUTING_URL)
+
+
+def routing_cache_path() -> Path:
+    return _data_dir() / ROUTING_CACHE_FILENAME
+
+
 def _parse_iso(value: str) -> datetime | None:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
@@ -163,7 +231,11 @@ def _parse_iso(value: str) -> datetime | None:
     return dt
 
 
-def read_cache(path: Path | None = None) -> CachedLeaderboard | None:
+def read_cache(path: Path | None = None, *, key: str = "leaderboard") -> CachedLeaderboard | None:
+    """Read a cached document. ``key`` names the payload field in the cache
+    file (``leaderboard`` for leaderboard.json, ``routing`` for routing.json);
+    the payload is returned on :attr:`CachedLeaderboard.leaderboard` either way.
+    """
     target = path or cache_path()
     if not target.exists():
         return None
@@ -174,7 +246,7 @@ def read_cache(path: Path | None = None) -> CachedLeaderboard | None:
     if not isinstance(raw, dict):
         return None
     fetched = _parse_iso(str(raw.get("fetched_at", "")))
-    leaderboard = raw.get("leaderboard")
+    leaderboard = raw.get(key)
     source = raw.get("source_url")
     if fetched is None or not isinstance(leaderboard, dict) or not isinstance(source, str):
         return None
@@ -196,6 +268,7 @@ def write_cache(
     etag: str | None = None,
     fetched_at: datetime | None = None,
     path: Path | None = None,
+    key: str = "leaderboard",
 ) -> None:
     target = path or cache_path()
     stamp = fetched_at or datetime.now(timezone.utc)
@@ -203,7 +276,7 @@ def write_cache(
         "fetched_at": stamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_url": source_url,
         "etag": etag,
-        "leaderboard": leaderboard,
+        key: leaderboard,
     }
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
@@ -227,7 +300,7 @@ def _default_warn(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def _override_hint(target_url: str) -> str:
+def _override_hint(target_url: str, url_env: str = SYNTHBENCH_URL_ENV) -> str:
     """Return the actionable corrective suffix for unreachable-URL warnings.
 
     sy-nkh: the v1.5.0 warning ended with ``no recommendation`` which left
@@ -235,10 +308,39 @@ def _override_hint(target_url: str) -> str:
     and tags the bundled-snapshot fallback so the message is actionable
     by itself.
     """
+    if url_env != SYNTHBENCH_URL_ENV:
+        return f"override the URL via ${url_env} if you have a mirror (current: {target_url})"
     return (
         f"override the URL via ${SYNTHBENCH_URL_ENV} if you have a mirror — "
         f"current default {target_url} is tracked in GH #494"
     )
+
+
+def _load_bundled_json(target: Path, required_list_key: str) -> tuple[dict[str, Any], datetime] | None:
+    """Read a package-bundled JSON snapshot; ``None`` when missing/malformed.
+
+    ``required_list_key`` names a top-level list the document must carry
+    (``entries`` for the leaderboard, ``routes`` for routing.json).
+    """
+    if not target.exists():
+        return None
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get(required_list_key), list):
+        return None
+    meta = raw.get("_meta") if isinstance(raw.get("_meta"), dict) else {}
+    snapshot_iso = meta.get("snapshot_date") or raw.get("generated_at")
+    fetched = _parse_iso(str(snapshot_iso)) if isinstance(snapshot_iso, str) else None
+    if fetched is None:
+        fetched = datetime(2026, 4, 24, tzinfo=timezone.utc)
+    return raw, fetched
+
+
+def _load_bundled_routing_snapshot(path: Path | None = None) -> tuple[dict[str, Any], datetime] | None:
+    """Read the package-bundled routing.json snapshot."""
+    return _load_bundled_json(path or _BUNDLED_ROUTING_SNAPSHOT_PATH, "routes")
 
 
 def _load_bundled_snapshot(
@@ -256,24 +358,9 @@ def _load_bundled_snapshot(
     a malformed snapshot just returns ``None`` and the caller continues
     to its no-recommendation branch.
     """
-    target = path or _BUNDLED_SNAPSHOT_PATH
-    if not target.exists():
-        return None
-    try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(raw, dict) or not isinstance(raw.get("entries"), list):
-        return None
-
-    meta = raw.get("_meta") if isinstance(raw.get("_meta"), dict) else {}
-    snapshot_iso = meta.get("snapshot_date") or raw.get("generated_at")
-    fetched = _parse_iso(str(snapshot_iso)) if isinstance(snapshot_iso, str) else None
-    if fetched is None:
-        # A snapshot without a parseable date is still usable; just
-        # stamp it at the epoch so the "stale" badge always shows.
-        fetched = datetime(2026, 4, 24, tzinfo=timezone.utc)
-    return raw, fetched
+    # A snapshot without a parseable date is still usable; it is stamped
+    # at a fixed old date so the "stale" badge always shows.
+    return _load_bundled_json(path or _BUNDLED_SNAPSHOT_PATH, "entries")
 
 
 def _fetch_http(
@@ -368,12 +455,74 @@ def load_leaderboard(
       URL is 404'ing). Returns ``None`` only when even the bundled
       snapshot is unreadable.
     """
-    target_url = url or synthbench_url()
+    return _load_document(
+        target_url=url or synthbench_url(),
+        cache_file=cache_path(),
+        cache_key="leaderboard",
+        bundled_loader=_load_bundled_snapshot,
+        url_env=SYNTHBENCH_URL_ENV,
+        required_list_key="entries",
+        label="synthbench",
+        client=client,
+        refresh=refresh,
+        offline=offline,
+        warn=warn,
+    )
+
+
+def load_routing(
+    *,
+    client: httpx.Client | None = None,
+    url: str | None = None,
+    refresh: bool | None = None,
+    offline: bool | None = None,
+    warn: WarnFn | None = None,
+) -> LoadedLeaderboard | None:
+    """Return the SynthBench ``routing.json`` document (cache-aware).
+
+    Same fetch / 24h cache / ETag / offline / bundled-snapshot behaviour as
+    :func:`load_leaderboard`, with its own cache file
+    (``synthbench-routing-cache.json``), its own bundled snapshot
+    (``data/synthbench-routing-snapshot.json``) and its own URL override
+    (``ALTHING_SYNTHBENCH_ROUTING_URL``). The offline and refresh env vars
+    are shared with the leaderboard reader. The document is returned on
+    :attr:`LoadedLeaderboard.leaderboard`.
+    """
+    return _load_document(
+        target_url=url or routing_url(),
+        cache_file=routing_cache_path(),
+        cache_key="routing",
+        bundled_loader=_load_bundled_routing_snapshot,
+        url_env=ROUTING_URL_ENV,
+        required_list_key="routes",
+        label="synthbench routing",
+        client=client,
+        refresh=refresh,
+        offline=offline,
+        warn=warn,
+    )
+
+
+def _load_document(
+    *,
+    target_url: str,
+    cache_file: Path,
+    cache_key: str,
+    bundled_loader: Callable[[], tuple[dict[str, Any], datetime] | None],
+    url_env: str,
+    required_list_key: str,
+    label: str,
+    client: httpx.Client | None,
+    refresh: bool | None,
+    offline: bool | None,
+    warn: WarnFn | None,
+) -> LoadedLeaderboard | None:
+    """Shared cache/ETag/offline/bundled-snapshot loader for SynthBench JSON."""
     emit = warn or _default_warn
     offline_flag = offline if offline is not None else _env_flag(SYNTHBENCH_OFFLINE_ENV)
     refresh_flag = refresh if refresh is not None else _env_flag(SYNTHBENCH_REFRESH_ENV)
 
-    cached = read_cache()
+    cached = read_cache(cache_file, key=cache_key)
 
     if offline_flag:
         if cached is not None:
@@ -382,16 +531,16 @@ def load_leaderboard(
             # while offline. Tag as ``cache`` if it's still fresh by TTL
             # standards, ``stale-cache`` otherwise so agents can decide
             # whether to trust the recommendation.
-            label = "cache" if _is_fresh(cached) else "stale-cache"
-            return LoadedLeaderboard(cached.leaderboard, cached.fetched_at, source=label)
+            source = "cache" if _is_fresh(cached) else "stale-cache"
+            return LoadedLeaderboard(cached.leaderboard, cached.fetched_at, source=source)
         # sy-nkh: offline mode previously gave up entirely without a cache;
         # surface the bundled snapshot here too so air-gapped users get a
         # usable recommendation on the first ever call.
-        bundled = _load_bundled_snapshot()
+        bundled = bundled_loader()
         if bundled is not None:
             data, snapshot_at = bundled
             emit(
-                f"althing: synthbench offline mode with no user cache — "
+                f"althing: {label} offline mode with no user cache — "
                 f"using bundled snapshot from {snapshot_at.date().isoformat()} "
                 f"(source=bundled-snapshot; see docs/recommended-models.md)"
             )
@@ -410,28 +559,30 @@ def load_leaderboard(
         data, new_etag, not_modified = _fetch_http(
             target_url, etag=conditional_etag, client=client, timeout=FETCH_TIMEOUT
         )
+        if data is not None and not isinstance(data.get(required_list_key), list):
+            raise SynthBenchFetchError(f"document from {target_url} has no '{required_list_key}' list")
     except SynthBenchFetchError as exc:
         if cached is not None:
             emit(
-                f"althing: synthbench fetch failed ({exc}); using stale cache from "
+                f"althing: {label} fetch failed ({exc}); using stale cache from "
                 f"{cached.fetched_at.isoformat()} (source=stale-cache)"
             )
             return LoadedLeaderboard(cached.leaderboard, cached.fetched_at, source="stale-cache")
         # sy-nkh: no cache + network error → bundled snapshot fallback.
-        # The canonical URL has been 404 since v1.5.0 ship (GH #494) so
-        # without this, every fresh install's --best-model-for is a
-        # no-op. Warn loudly with the env-var override so users with a
-        # working mirror have a one-line fix.
-        bundled = _load_bundled_snapshot()
+        # Warn loudly with the env-var override so users with a working
+        # mirror have a one-line fix.
+        bundled = bundled_loader()
         if bundled is not None:
             data_snap, snapshot_at = bundled
             emit(
-                f"althing: synthbench unavailable ({exc}); "
+                f"althing: {label} unavailable ({exc}); "
                 f"using bundled snapshot from {snapshot_at.date().isoformat()} "
-                f"(source=bundled-snapshot) — {_override_hint(target_url)}"
+                f"(source=bundled-snapshot) — {_override_hint(target_url, url_env)}"
             )
             return LoadedLeaderboard(data_snap, snapshot_at, source="bundled-snapshot")
-        emit(f"althing: synthbench unavailable ({exc}) and no bundled snapshot found; {_override_hint(target_url)}")
+        emit(
+            f"althing: {label} unavailable ({exc}) and no bundled snapshot found; {_override_hint(target_url, url_env)}"
+        )
         return None
 
     if not_modified and cached is not None:
@@ -440,12 +591,14 @@ def load_leaderboard(
         # acknowledged it, not as ``cache`` (which would imply we never
         # talked to the upstream this run).
         now = datetime.now(timezone.utc)
-        write_cache(cached.leaderboard, source_url=target_url, etag=cached.etag, fetched_at=now)
+        write_cache(
+            cached.leaderboard, source_url=target_url, etag=cached.etag, fetched_at=now, path=cache_file, key=cache_key
+        )
         return LoadedLeaderboard(cached.leaderboard, now, source="live")
 
     assert data is not None
     now = datetime.now(timezone.utc)
-    write_cache(data, source_url=target_url, etag=new_etag, fetched_at=now)
+    write_cache(data, source_url=target_url, etag=new_etag, fetched_at=now, path=cache_file, key=cache_key)
     return LoadedLeaderboard(data, now, source="live")
 
 
@@ -525,6 +678,10 @@ def rank_entries(
         if not isinstance(entry, dict):
             continue
         if entry.get("dataset") != dataset:
+            continue
+        # Baseline rows (random / majority) are reference points, not
+        # models anyone should run.
+        if entry.get("is_baseline") is True or entry.get("framework") == "baseline":
             continue
         if topic:
             score = _topic_score(entry, topic)
@@ -673,9 +830,144 @@ def _runnable_id_from_row(entry: dict[str, Any]) -> str | None:
         provider_id = entry.get("provider_id")
         if isinstance(provider_id, str):
             pid = provider_id.strip()
+            # ``provider_id`` on current leaderboard rows is often a
+            # framework tag (althing / raw / ensemble / baseline), not an
+            # upstream provider; never glue those onto a model slug.
+            if pid.lower() in _PSEUDO_PROVIDER_IDS:
+                return None
             if pid and is_runnable_model_id(pid) and "/" not in pid:
                 return f"{pid}/{model_id}"
     return model_id
+
+
+# ``provider_id`` values that tag a framework rather than an upstream provider.
+_PSEUDO_PROVIDER_IDS = frozenset({"althing", "synthpanel", "raw", "ensemble", "baseline", "product"})
+
+# Upstream namespaces (OpenRouter-style ``<namespace>/<model>``) that Althing
+# can also call directly, with the canonical id prefix and the credential(s)
+# the direct provider needs.
+_DIRECT_PROVIDERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "anthropic": (("claude-",), ("ANTHROPIC_API_KEY",)),
+    "google": (("gemini-",), ("GEMINI_API_KEY", "GOOGLE_API_KEY")),
+    "x-ai": (("grok-",), ("XAI_API_KEY",)),
+    "openai": (("gpt-", "o1", "o3", "o4"), ("OPENAI_API_KEY",)),
+}
+
+# Model specs that are already Althing-native and must not be rewritten.
+_NATIVE_SPEC_PREFIXES: tuple[str, ...] = ("openrouter/", "ollama:", "local:", "claude-code:", "codex:")
+
+
+def _normalize_slug(text: str) -> str:
+    """Normalize a model slug for alias matching: ``claude-haiku-4.5`` and
+    ``claude-haiku-4-5-20251001`` both become ``claude-haiku-4-5``."""
+    out = text.strip().lower().replace(".", "-")
+    return re.sub(r"-\d{8}$", "", out)
+
+
+def direct_alias_for(model_id: str) -> tuple[str, tuple[str, ...]] | None:
+    """Return ``(direct_model, credential_env_vars)`` when Althing already has
+    a direct-provider alias for an upstream ``<namespace>/<model>`` id.
+
+    Only ids whose normalized slug matches a target in the alias table
+    (built-in aliases plus ``~/.althing/aliases.yaml`` and
+    ``ALTHING_MODEL_ALIASES``) qualify, e.g. ``anthropic/claude-haiku-4.5``
+    maps to ``claude-haiku-4-5-20251001`` through the ``haiku`` alias.
+    """
+    if "/" not in model_id:
+        return None
+    namespace, tail = model_id.split("/", 1)
+    family = _DIRECT_PROVIDERS.get(namespace.strip().lower())
+    if family is None:
+        return None
+    prefixes, env_vars = family
+    wanted = _normalize_slug(tail)
+    from althing.llm.aliases import _get_aliases
+
+    for target in sorted(set(_get_aliases().values())):
+        if target.startswith(prefixes) and _normalize_slug(target) == wanted:
+            return target, env_vars
+    return None
+
+
+def runnable_model_for(
+    model_id: str | None,
+    *,
+    has_credential: Callable[[str], bool] | None = None,
+) -> str | None:
+    """Map a SynthBench ``model_id`` to a runnable Althing model string.
+
+    - ``<namespace>/<model>`` ids become ``openrouter/<namespace>/<model>``,
+      unless :func:`direct_alias_for` finds a direct-provider alias and the
+      user has that provider's credentials, in which case the direct id
+      is used.
+    - Ids that are already Althing specs (``openrouter/...``, ``ollama:``,
+      ``local:``, subscription CLI prefixes) pass through.
+    - Bare ids (``gpt-4o-mini``, ``haiku``) resolve through the alias table.
+    - Display labels and empty values return ``None``.
+
+    ``has_credential`` defaults to :func:`althing.credentials.has_credential`.
+    """
+    if not isinstance(model_id, str):
+        return None
+    text = model_id.strip()
+    if not is_runnable_model_id(text):
+        return None
+    if text.startswith(_NATIVE_SPEC_PREFIXES):
+        return text
+    if "/" in text:
+        direct = direct_alias_for(text)
+        if direct is not None:
+            if has_credential is None:
+                from althing.credentials import has_credential as _has_cred
+
+                has_credential = _has_cred
+            target, env_vars = direct
+            if any(has_credential(env) for env in env_vars):
+                return target
+        return f"openrouter/{text}"
+    return _resolve_model_string(text)
+
+
+def ensemble_members_from_row(
+    entry: dict[str, Any],
+    *,
+    has_credential: Callable[[str], bool] | None = None,
+) -> list[RecommendedMember]:
+    """Turn a leaderboard row's ``ensemble_members`` into weighted members.
+
+    Weights are equal unless members carry a numeric ``weight``; they are
+    normalized to sum to 1. Members whose ``model_id`` cannot be mapped to
+    a runnable model are kept with ``runnable=False`` so callers can report
+    what was dropped.
+    """
+    raw = entry.get("ensemble_members")
+    if not isinstance(raw, list):
+        return []
+    parsed: list[tuple[str, str | None, float]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        mid = item.get("model_id")
+        if not isinstance(mid, str) or not mid.strip():
+            continue
+        fw = item.get("framework") if isinstance(item.get("framework"), str) else None
+        w = item.get("weight")
+        weight = float(w) if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0 else 1.0
+        parsed.append((mid.strip(), fw, weight))
+    total = sum(w for _, _, w in parsed) or 1.0
+    members: list[RecommendedMember] = []
+    for mid, fw, weight in parsed:
+        mapped = runnable_model_for(mid, has_credential=has_credential)
+        members.append(
+            RecommendedMember(
+                model=mapped or mid,
+                model_id=mid,
+                framework=fw,
+                weight=weight / total,
+                runnable=mapped is not None,
+            )
+        )
+    return members
 
 
 def recommend(
@@ -718,6 +1010,7 @@ def recommend(
     resolved_model = _resolve_model_string(raw_model)
     framework = entry.get("framework") if isinstance(entry.get("framework"), str) else None
     is_ensemble = bool(entry.get("is_ensemble"))
+    members = tuple(ensemble_members_from_row(entry))
 
     # When the entry's model field is empty OR a non-runnable display label
     # (gh-519: e.g. "Althing (Gemini Flash Lite)"), substitute a runnable
@@ -732,10 +1025,19 @@ def recommend(
     #    resolves to a runnable id — otherwise keep the original string so the
     #    caller can report it verbatim and refuse rather than silently swap in
     #    a config-id hash fragment.
-    if not is_runnable_model_id(resolved_model):
+    #
+    # Ensemble rows that publish ``ensemble_members`` are handled first: the
+    # recommendation carries the full weighted member list and ``model`` is
+    # the first runnable member so single-model callers still get something
+    # they can run. Upstream ``<namespace>/<model>`` ids are mapped to a
+    # runnable Althing string (``openrouter/<model_id>`` or a direct alias).
+    runnable_members = [m for m in members if m.runnable]
+    if members and runnable_members:
+        resolved_model = runnable_members[0].model
+    elif not is_runnable_model_id(resolved_model):
         runnable_upstream = _runnable_id_from_row(entry)
         if runnable_upstream is not None:
-            resolved_model = _resolve_model_string(runnable_upstream)
+            resolved_model = runnable_model_for(runnable_upstream) or runnable_upstream
         elif is_ensemble or framework == "product":
             base = _underlying_base(entry)
             if base:
@@ -765,4 +1067,5 @@ def recommend(
         low_confidence=run_count > 0 and run_count < MIN_RUN_COUNT,
         runnable=is_runnable_model_id(final_model),
         source=source,
+        members=members,
     )

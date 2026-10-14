@@ -1219,6 +1219,20 @@ want to add or change.
 
 ### SynthBench-driven model picker
 
+`--model auto` picks the model, or a weighted blend of models, from
+SynthBench routing data. It uses the panel's population (for example
+`--population country=France`) and the instrument's question topics, and
+prints the choice and a one-sentence reason before the run:
+
+```bash
+althing panel run --personas global-respondents --population country=Japan     --instrument s.yaml --model auto
+```
+
+A blend runs as a weighted per-persona split. The decision is recorded
+under `metadata.model_routing`. MCP `run_panel` / `run_quick_poll` and
+the SDK's `run_panel` accept `model="auto"` too. See
+[docs/model-routing.md](docs/model-routing.md).
+
 `--best-model-for` consults the [SynthBench](https://synthbench.org)
 leaderboard and uses the top-ranked model for a topic or dataset:
 
@@ -1235,8 +1249,9 @@ rules, offline behaviour, and a use-case → top-model table.
 If the top-ranked entry exposes a display label (e.g. `Althing (Gemini
 Flash Lite)`) rather than a runnable provider model id in its `model`
 field, `--best-model-for` substitutes the runnable `model_id` the
-leaderboard publishes alongside it (e.g. `google/gemini-2.5-flash-lite`),
-so you get a real, runnable model instead of a refusal. Only when no
+leaderboard publishes alongside it (e.g. `google/gemini-2.5-flash-lite`,
+run as `openrouter/google/gemini-2.5-flash-lite`), so you get a real,
+runnable model instead of a refusal. Only when no
 runnable id can be resolved does it refuse to stamp the label — printing
 an actionable message and falling back to your existing `--model`/default.
 Pair with `--dry-run` to see the picked model (and any such refusal)

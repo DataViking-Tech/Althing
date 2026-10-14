@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 import yaml
 
+from althing import model_routing as _model_routing
 from althing._runners import (
     build_synthesis_error_payload,
     detect_synthesis_context_overflow,
@@ -79,6 +80,10 @@ from althing.instrument import Instrument, InstrumentError, parse_instrument
 from althing.llm import fast_default as _fast_default
 from althing.llm.client import LLMClient
 from althing.metadata import PanelTimer, build_metadata
+
+# assign_models_to_personas lives in althing.model_split so the CLI, MCP
+# server and SDK share one split; re-exported here for existing imports.
+from althing.model_split import assign_models_to_personas
 from althing.orchestrator import PanelistResult, RunAbortedError, run_panel_parallel
 from althing.pack_diff import (
     CompositionStats,
@@ -238,13 +243,82 @@ def _apply_best_model_for(args: argparse.Namespace, spec: str) -> str | None:
             f"(< {synthbench.MIN_RUN_COUNT}); results may be noisy.",
             file=sys.stderr,
         )
-    if rec.is_ensemble or rec.framework == "product":
+    if len(rec.members) > 1:
+        print(
+            f"synthbench: note — top entry is a blend of {len(rec.members)} models; using its first "
+            f"runnable member '{rec.model}'. Use --model auto to run a routed blend as a weighted "
+            "per-persona split.",
+            file=sys.stderr,
+        )
+    elif rec.is_ensemble or rec.framework == "product":
         print(
             f"synthbench: note — top entry is a product/ensemble config; using underlying base model '{rec.model}'.",
             file=sys.stderr,
         )
     args.model = rec.model
     return rec.model
+
+
+def _apply_auto_model_routing(
+    args: argparse.Namespace,
+    *,
+    personas: list[dict[str, Any]],
+    instrument: Instrument,
+    default_model: str,
+) -> int | tuple[str, str | None, str | None]:
+    """Resolve ``--model auto`` through :func:`althing.model_routing.route_models`.
+
+    Prints the decision to stderr and stores it on ``args._model_routing``
+    so it lands in the run's ``metadata.model_routing``. Returns an exit
+    code on error, else ``(model, has_model, has_models)``: a single model
+    comes back as ``has_model``; a blend comes back as a weighted
+    ``--models`` spec string in ``has_models``.
+    """
+    try:
+        decision = _model_routing.route_models(
+            questions=[q for rnd in instrument.rounds for q in rnd.questions],
+            population=getattr(args, "population", None),
+            persona_pack=getattr(args, "personas", None),
+            use_case=getattr(args, "use_case", None),
+            topic=getattr(args, "routing_topic", None),
+            default_model=default_model,
+        )
+    except ValueError as exc:
+        print(f"Error: --model auto: {exc}", file=sys.stderr)
+        return 1
+
+    for line in decision.format_lines():
+        print(line, file=sys.stderr)
+    args._model_routing = decision.to_dict()
+
+    if decision.model_spec:
+        spec = decision.models_spec_string()
+        if getattr(args, "blend", False) and instrument.is_multi_round:
+            print(
+                "Note: --blend is not available for multi-round instruments; running the "
+                "routed blend as a weighted per-persona split.",
+                file=sys.stderr,
+            )
+            args.blend = False
+        args.models = spec
+        args.model = None
+        return decision.primary_model, None, spec
+
+    if getattr(args, "blend", False):
+        print(
+            "Note: --model auto picked a single model, so there is nothing to blend; ignoring --blend.",
+            file=sys.stderr,
+        )
+        args.blend = False
+    args.model = decision.model
+    return decision.primary_model, decision.primary_model, None
+
+
+def _attach_model_routing(args: argparse.Namespace, metadata: dict[str, Any]) -> None:
+    """Record a ``--model auto`` decision under ``metadata.model_routing``."""
+    routing = getattr(args, "_model_routing", None)
+    if routing:
+        metadata["model_routing"] = routing
 
 
 def _resolve_model(args: argparse.Namespace) -> str:
@@ -321,119 +395,6 @@ def parse_models_spec(spec: str) -> list[tuple[str, float]]:
 def is_ensemble_spec(spec: str) -> bool:
     """Return True when *spec* is a weight-free ensemble list (e.g. ``"haiku,sonnet"``)."""
     return all(":" not in e for e in spec.split(",") if e.strip())
-
-
-def assign_models_to_personas(
-    personas: list[dict[str, Any]],
-    model_spec: list[tuple[str, float]],
-    default_model: str,
-) -> tuple[dict[str, str], list[str]]:
-    """Assign models to personas using Hamilton's largest-remainder method.
-
-    Resolution order: persona YAML 'model' field > weighted assignment > default.
-
-    Algorithm (fully deterministic — same inputs produce the same output):
-
-    1. **YAML override pass.** Walk ``personas`` in list order. Any persona
-       with a ``model`` field keeps that model and is removed from the
-       assignment pool. This override takes precedence over the ``--models``
-       spec unconditionally.
-    2. **Normalize weights.** Compute ``total = sum(weights)`` and divide each
-       weight by it. Absolute weights don't matter, only ratios — so
-       ``"a:0.5,b:0.5"``, ``"a:1,b:1"`` and ``"a:50,b:50"`` all behave the
-       same.
-    3. **Largest-remainder allocation.** Floor each ``weight * N`` quota,
-       then hand out leftover seats in descending order of fractional
-       remainder. Ties are broken deterministically by position in the spec.
-    4. **Min-1 guarantee** (sp-27rz). When ``N >= len(model_spec)``, every
-       model in ``model_spec`` is guaranteed at least one persona: any
-       zero-count model pulls a seat from the currently largest bucket.
-       The prior round-based allocation could silently hand the last model
-       0 personas, dropping it from per_model_results without any warning.
-       When there are fewer personas than models, affected models still
-       end up at zero and a warning is appended to the returned list so
-       callers can surface it to the user.
-
-    Edge cases:
-
-    * **Empty pool** (every persona has a YAML ``model`` override):
-      ``model_spec`` is effectively ignored and the YAML map is returned.
-    * **Weights that don't sum to 1.0** (e.g. ``"a:2,b:3"``): normalized
-      internally, so the split still works. The CLI warns about this so
-      the user knows the ratio they intended is what got applied.
-    * **Zero weight**: rejected upstream by :func:`parse_models_spec`.
-    * **``default_model``**: currently unused by the algorithm — YAML
-      override and the ``--models`` spec between them cover every persona.
-      Kept in the signature so callers can pass the CLI's fallback for
-      future use.
-
-    Returns a ``(assignments, warnings)`` tuple.
-    """
-    warnings: list[str] = []
-    needs_assignment: list[str] = []
-    result: dict[str, str] = {}
-    for p in personas:
-        name = p.get("name", "Anonymous")
-        # sp-4loufu: accept ``llm_overrides.model`` as an equivalent to
-        # the legacy top-level ``model`` field. Top-level wins so
-        # existing YAML keeps its behaviour.
-        explicit_model = p.get("model") or (p.get("llm_overrides") or {}).get("model")
-        if explicit_model:
-            result[name] = explicit_model
-        else:
-            needs_assignment.append(name)
-
-    if not needs_assignment:
-        return result, warnings
-
-    n = len(needs_assignment)
-    total_weight = sum(w for _, w in model_spec)
-    normalized = [(m, w / total_weight) for m, w in model_spec]
-
-    # Hamilton's method (largest-remainder): floor each quota, then hand out
-    # leftover seats in descending order of fractional remainder. Deterministic
-    # ties broken by position in the spec.
-    quotas = [w * n for _, w in normalized]
-    counts = [int(q) for q in quotas]
-    remainders = [q - int(q) for q in quotas]
-    seats_left = n - sum(counts)
-    order = sorted(range(len(counts)), key=lambda i: (-remainders[i], i))
-    for i in order[:seats_left]:
-        counts[i] += 1
-
-    # Min-1 guarantee: when there are enough personas to cover every model,
-    # ensure no model is left at zero by taking one seat from the currently
-    # largest bucket. Preserves proportions as closely as possible while
-    # eliminating the silent-drop bug.
-    if n >= len(model_spec):
-        for zi, c in enumerate(counts):
-            if c != 0:
-                continue
-            donor = max(
-                range(len(counts)),
-                key=lambda i: (counts[i], -i),
-            )
-            if counts[donor] <= 1:
-                break
-            counts[donor] -= 1
-            counts[zi] += 1
-
-    # Any remaining zeros mean personas < models — surface loudly.
-    for (model, _), c in zip(normalized, counts):
-        if c == 0:
-            warnings.append(
-                f"model_allocation: '{model}' received 0 of {n} personas "
-                f"(fewer personas than weighted models); it will be absent "
-                f"from per_model_results"
-            )
-
-    idx = 0
-    for (model, _), c in zip(normalized, counts):
-        for _ in range(c):
-            result[needs_assignment[idx]] = model
-            idx += 1
-
-    return result, warnings
 
 
 # sp-zdul: display helpers for --models weighted assignment
@@ -1424,9 +1385,28 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
     # Validate mutual exclusivity of --model and --models
     has_model = getattr(args, "model", None)
     has_models = getattr(args, "models", None)
+    # --model auto: route from SynthBench routing.json once personas and the
+    # instrument are loaded (the decision needs the population and the
+    # question text). Until then the run carries no explicit model, so the
+    # default-model resolution below supplies the fallback.
+    auto_routing = _model_routing.is_auto_model(has_model)
+    if auto_routing and has_models:
+        print("Error: --model auto and --models are mutually exclusive.", file=sys.stderr)
+        return 1
     if has_model and has_models:
         print("Error: --model and --models are mutually exclusive.", file=sys.stderr)
         return 1
+    if auto_routing and getattr(args, "best_model_for", None):
+        print("Error: --model auto and --best-model-for are mutually exclusive.", file=sys.stderr)
+        return 1
+    if not auto_routing:
+        for flag, dest in (("--use-case", "use_case"), ("--topic", "routing_topic")):
+            if getattr(args, dest, None):
+                print(f"Error: {flag} only applies with --model auto.", file=sys.stderr)
+                return 1
+    if auto_routing:
+        args.model = None
+        has_model = None
 
     # sp-zq3: --best-model-for consults the SynthBench leaderboard and
     # overrides --model. Must be applied before _resolve_model() so the
@@ -1447,7 +1427,7 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
             # "synthbench unavailable" line to stderr.
             pass
 
-    if not has_models:
+    if not has_models and not auto_routing:
         _announce_default_model(args)
     model = _resolve_model(args)
 
@@ -1541,7 +1521,10 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
     # fast equivalent via the shared policy and say so on stderr. Explicit
     # --model / --models / --best-model-for picks are honored verbatim
     # (all three leave args.model / has_models truthy by this point).
-    if not getattr(args, "model", None) and not has_models:
+    if auto_routing:
+        # The routing fallback default; no note, since routing may not use it.
+        model, _swapped = _fast_default.fast_default_for_panel(model, len(personas))
+    elif not getattr(args, "model", None) and not has_models:
         fast_model, swapped_from = _fast_default.fast_default_for_panel(model, len(personas))
         if swapped_from is not None:
             model = fast_model
@@ -1684,6 +1667,18 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
     temperature: float | None = getattr(args, "temperature", None)
     top_p: float | None = getattr(args, "top_p", None)
     seed: int | None = getattr(args, "seed", None)
+
+    # ── --model auto: SynthBench routing ─────────────────────────────────
+    # Personas (with --population applied) and the vars-substituted
+    # instrument are loaded, so the slice and topic can be inferred. A
+    # single-model decision becomes --model; a blend becomes a weighted
+    # --models spec, which the block below splits across personas (or runs
+    # through --blend when the user asked for it and the instrument allows).
+    if auto_routing:
+        rc = _apply_auto_model_routing(args, personas=personas, instrument=instrument, default_model=model)
+        if isinstance(rc, int):
+            return rc
+        model, has_model, has_models = rc
 
     # ── sp-blend: multi-model ensemble ───────────────────────────────────
     # Parse --models spec and build per-persona model assignments.
@@ -2024,6 +2019,7 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
             template_vars=template_vars or None,
             panelist_per_model=ens_per_model_meta,
         )
+        _attach_model_routing(args, output["metadata"])
         # hq-0pnq: --save was a silent no-op in the ensemble path because
         # this branch returned before the persistence block at the end of
         # handle_panel_run(). Flatten per-model panelist results into the
@@ -2907,6 +2903,7 @@ def handle_panel_run(args: argparse.Namespace, fmt: OutputFormat) -> int:
     if profile is not None:
         metadata["profile"] = profile.name
         metadata["profile_hash"] = profile.config_hash()
+    _attach_model_routing(args, metadata)
 
     # Output results
     banner = _build_invalid_banner(
@@ -3790,6 +3787,7 @@ def _handle_panel_run_multi_round(
     if profile is not None:
         metadata["profile"] = profile.name
         metadata["profile_hash"] = profile.config_hash()
+    _attach_model_routing(args, metadata)
 
     # sp-nn8k: surface DEFAULT_PRICING fallbacks loudly.
     cost_fallback_warnings = build_cost_fallback_warnings([*panelist_per_model_usage.keys(), effective_synth_model])

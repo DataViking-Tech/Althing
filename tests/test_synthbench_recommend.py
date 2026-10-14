@@ -341,7 +341,8 @@ def test_recommend_prefers_runnable_model_id_over_display_label() -> None:
     }
     rec = recommend(":globalopinionqa", leaderboard=board)
     assert rec is not None
-    assert rec.model == "google/gemini-2.5-flash-lite"
+    # Upstream ids run through OpenRouter (routing contract v1).
+    assert rec.model == "openrouter/google/gemini-2.5-flash-lite"
     assert rec.runnable is True
     # The original display label is preserved as raw_model for provenance.
     assert rec.raw_model == "Althing (Gemini Flash Lite)"
@@ -364,7 +365,8 @@ def test_recommend_model_id_wins_over_config_id_inference() -> None:
     }
     rec = recommend(":globalopinionqa", leaderboard=board)
     assert rec is not None
-    assert rec.model == "google/gemini-2.5-flash-lite"
+    # Upstream ids run through OpenRouter (routing contract v1).
+    assert rec.model == "openrouter/google/gemini-2.5-flash-lite"
     assert rec.runnable is True
 
 
@@ -383,7 +385,8 @@ def test_recommend_joins_provider_id_with_bare_model_id() -> None:
     }
     rec = recommend(":globalopinionqa", leaderboard=board)
     assert rec is not None
-    assert rec.model == "google/gemini-2.5-flash-lite"
+    # Upstream ids run through OpenRouter (routing contract v1).
+    assert rec.model == "openrouter/google/gemini-2.5-flash-lite"
     assert rec.runnable is True
 
 
@@ -702,8 +705,9 @@ class TestBundledSnapshotFallback:
 
         topics = (
             "Economy & Work",
-            "Technology & Digital Life",
             "Health & Science",
+            "Politics & Governance",
+            "International Relations & Security",
         )
         with _client(handler) as client:
             for topic in topics:

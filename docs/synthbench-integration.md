@@ -15,7 +15,7 @@ JSD against a published human baseline, which Althing produces only
 when you pass `--calibrate-against DATASET:QUESTION` (see
 [`docs/convergence.md`](convergence.md) for the calibration mechanics).
 
-A bare `althing panel run --personas ... --topic "pricing"` is
+A bare `althing panel run --personas ... --instrument ...` is
 qualitative output and has no SynthBench score to submit. The CLI
 hard-fails at parse time if you try:
 
