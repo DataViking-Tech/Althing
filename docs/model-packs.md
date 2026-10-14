@@ -28,6 +28,19 @@
 > CLI flag. The runnable surface today is the `--models` syntax (`docs/ensemble.md`)
 > and the MCP `models: []` parameter (`docs/mcp.md`). A future `--model-pack
 > <name>` shortcut will compile to the same strings.
+>
+> **Want the data to pick?** `--model auto` (CLI) or `model="auto"` (MCP and
+> SDK) chooses a model or weighted blend from SynthBench results for the
+> panel's respondent group and question topic. See
+> [model-routing.md](model-routing.md). The packs below are fixed presets
+> for when you want to choose the mix yourself.
+>
+> **Multi-round instruments.** `--blend` and `--max-cost` only work with
+> single-round instruments. The bundled packs `pricing-discovery`,
+> `landing-page-comprehension`, `feature-prioritization`, `name-test` and
+> `churn-diagnosis` are multi-round, so the `--blend` examples below use
+> single-round instruments (`market-research`, `product-feedback`). A
+> weighted `--models a:0.5,b:0.5` split works with either kind.
 
 ## Why model packs exist
 
@@ -35,15 +48,16 @@ Althing's [SynthBench](https://synthbench.org) leaderboard tracks model
 fidelity against real human distributions (GlobalOpinionQA and friends). Two
 findings from the live data drive these packs:
 
-1. **No single model is best at everything.** Different families top different
-   topic slices — `claude-haiku-4-5` leads "Economy & Work", `gemini-2.5-flash`
-   leads "Technology & Digital Life". A single-model panel inherits that
-   model's blind spots wholesale.
-2. **Model-diverse ensembles narrow the variance.** When the same panel is
-   run across families (Anthropic + OpenAI + Google), the
-   [blended distribution](ensemble.md) is closer to the human baseline
-   than any single contributing model on most topics. The trade-off is cost
-   and latency: ensembles run the full panel once per model.
+1. **No single model is best at everything.** Which model leads changes
+   by dataset and by topic, and the rankings move as new models are
+   added. Check the live [leaderboard](https://synthbench.org) or
+   `https://synthbench.org/data/leaderboard.json` for current numbers
+   instead of relying on a list in these docs.
+2. **Blends of models from different families rank high.** On the
+   leaderboard snapshot bundled with this release (October 2026), a blend
+   of models from several families scores above every single model on
+   each of the four core datasets. The trade-off is cost and latency: an
+   ensemble runs the full panel once per model.
 
 The corollary an agent should internalize:
 
@@ -92,6 +106,7 @@ althing panel run \
 // MCP run_panel
 {
   "instrument_pack": "pricing-discovery",
+  "vars": {"problem": "choosing a project management tool"},
   "pack_id": "general-consumer",
   "model": "haiku",
   "decision_being_informed": "early ideation, not a launch decision"
@@ -122,7 +137,7 @@ panel per model.
 ```bash
 althing panel run \
   --personas examples/personas.yaml \
-  --instrument pricing-discovery \
+  --instrument market-research \
   --var problem="choosing a project management tool" \
   --models 'haiku,sonnet,gemini-2.5-flash' \
   --blend \
@@ -134,7 +149,8 @@ althing panel run \
 ```jsonc
 // MCP run_panel
 {
-  "instrument_pack": "pricing-discovery",
+  "instrument_pack": "market-research",
+  "vars": {"problem": "choosing a project management tool"},
   "pack_id": "general-consumer",
   "models": ["haiku", "sonnet", "gemini-2.5-flash"],
   "decision_being_informed": "choosing launch tier price"
@@ -142,9 +158,11 @@ althing panel run \
 ```
 
 **What you get:** 3× the cost and latency of single-model (~$0.05–$0.15 for
-15 personas), plus a `blend` block summarising cross-model agreement.
-`metadata.cost.per_model` will have three buckets (one per family). This is
-the SynthBench-recommended default for non-trivial decisions.
+15 personas). On the CLI, `--blend` adds a `blend` block with the weighted
+response distribution per question and each model's own distribution
+(`per_model`). Over MCP, `models` returns per-model results
+(`per_model_results`) and no `blend` block; compare the models yourself.
+`metadata.cost.per_model` will have three buckets (one per family).
 
 ---
 
@@ -160,14 +178,17 @@ more objections.
 ```bash
 althing panel run \
   --personas examples/personas.yaml \
-  --instrument 'landing-page-comprehension' \
-  --var landing_page="Acme — ship faster with automated deploys. Start free, no card required." \
-  --var alt_cta="Start free trial" \
+  --instrument product-feedback \
+  --var product="Acme, a deploy tool: ship faster with automated deploys. Start free, no card required." \
   --models 'sonnet,gpt-4o,gemini-2.5-pro' \
   --blend \
   --temperature 0.9 \
   --output-format json
 ```
+
+To run the multi-round `landing-page-comprehension` pack with this model
+set, drop `--blend` (the CLI refuses it for multi-round instruments) or use
+a weighted split such as `--models 'sonnet:0.34,gpt-4o:0.33,gemini-2.5-pro:0.33'`.
 
 **MCP / SDK:**
 
@@ -308,7 +329,7 @@ per model, with blending. **This is the most expensive pack.**
 ```bash
 althing panel run \
   --personas examples/personas.yaml \
-  --instrument pricing-discovery \
+  --instrument market-research \
   --var problem="choosing a project management tool" \
   --models 'opus,sonnet,gpt-4o,gemini-2.5-pro' \
   --blend \
@@ -316,7 +337,11 @@ althing panel run \
   --output-format json
 ```
 
-`--max-cost` is a hard ceiling — the run aborts before exceeding it.
+`--max-cost` is a hard ceiling: the run stops starting new panelists once
+the projected spend would pass it. Both `--blend` and `--max-cost` need a
+single-round instrument; for `pricing-discovery`, use a weighted split
+(`--models 'opus:0.25,sonnet:0.25,gpt-4o:0.25,gemini-2.5-pro:0.25'`) and
+no `--max-cost`.
 
 **MCP / SDK:**
 
@@ -324,6 +349,7 @@ althing panel run \
 // MCP run_panel
 {
   "instrument_pack": "pricing-discovery",
+  "vars": {"problem": "choosing a project management tool"},
   "pack_id": "general-consumer",
   "models": ["opus", "sonnet", "gpt-4o", "gemini-2.5-pro"],
   "decision_being_informed": "launch-tier pricing for Q3 GA"
@@ -331,9 +357,11 @@ althing panel run \
 ```
 
 **What you get:** four full passes of the panel (15 personas × 4 models ×
-N questions). Cost typically $1–$5 for a moderate instrument. The `blend`
-block's `convergence` score is the headline signal — high convergence across
-four families is the strongest fidelity claim Althing can make.
+N questions). Cost typically $1–$5 for a moderate instrument. Read the
+`blend` block's `per_model` distributions next to the blended
+`distribution`: when four families give similar distributions, the result
+does not hinge on one provider. There is no single agreement score in the
+output; compare the per-model distributions directly.
 
 ---
 
@@ -421,10 +449,9 @@ caller:
 
 3. **Check `metadata.cost.per_model`.** If it has only one bucket, the
    panel was single-model — treat the result as directional only, and
-   escalate to a multi-model re-run before acting on the answer. The
-   [SynthBench fidelity numbers](https://synthbench.org) show that a single
-   cheap model can be off-baseline by 10–20% JSD on contested topics; a
-   3-family ensemble typically halves that.
+   escalate to a multi-model re-run before acting on the answer. See the
+   [SynthBench leaderboard](https://synthbench.org) for how far single
+   models and blends sit from human answers on each dataset.
 
 4. **Honor `decision_being_informed`.** All MCP entry points require a
    12–280 character `decision_being_informed` string — it forces the caller
@@ -437,14 +464,18 @@ caller:
    diversity is a cheap (in `balanced-research-ensemble`) way to keep that
    confound out of the conclusion.
 
-## How this composes with `--best-model-for`
+## How this composes with `--model auto` and `--best-model-for`
 
+`--model auto` (see [docs/model-routing.md](model-routing.md)) picks the
+best Althing-conditioned model or blend from SynthBench routing data for
+the panel's respondent group and question topic, and says why on stderr.
 `--best-model-for "<topic>"` (see
 [docs/recommended-models.md](recommended-models.md)) picks the single
-top-ranked SynthBench model for a topic slice. It is mutually exclusive with
-`--models`. Choose by question:
+top-ranked leaderboard row for a leaderboard topic label. Both are mutually
+exclusive with `--models`. Choose by question:
 
-- "Which single model fits this topic best?" → `--best-model-for`.
+- "What does the benchmark say to use for this panel?" → `--model auto`.
+- "Which single model tops this leaderboard topic?" → `--best-model-for`.
 - "Which model *mix* fits this decision's stake?" → a model pack from this
   page.
 

@@ -40,6 +40,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import InputRequiredResult
 
 from althing import __version__ as _althing_version
+from althing import model_routing as _model_routing
 from althing._runners import (
     EXTRACT_SCHEMA_REGISTRY,
     MAX_PERSONAS,
@@ -229,6 +230,77 @@ def _resolve_mcp_default_model_for_panel(persona_count: int) -> str:
             model,
         )
     return model
+
+
+def _validate_auto_model_args(
+    *,
+    model: str | None,
+    models: list[str] | None = None,
+    persona_models: dict[str, str] | None = None,
+    use_case: str | None = None,
+    topic: str | None = None,
+) -> str | None:
+    """Typed error JSON for invalid ``model="auto"`` combinations, else ``None``."""
+    if _model_routing.is_auto_model(model):
+        if models:
+            return _invalid_tool_arg(
+                "model='auto' and 'models' are mutually exclusive; pass one or the other.",
+                field_path="models",
+            )
+        if persona_models:
+            return _invalid_tool_arg(
+                "model='auto' picks the per-persona split itself; drop persona_models or pass an explicit model.",
+                field_path="persona_models",
+            )
+        return None
+    for name, value in (("use_case", use_case), ("topic", topic)):
+        if value is not None:
+            return _invalid_tool_arg(
+                f"'{name}' only applies with model='auto'.",
+                field_path=name,
+            )
+    return None
+
+
+def _route_auto_model(
+    *,
+    personas: list[dict[str, Any]],
+    questions: list[Any],
+    pack_id: str | None,
+    use_case: str | None,
+    topic: str | None,
+    default_model: str,
+) -> tuple[_model_routing.RouteDecision, str, dict[str, str] | None] | str:
+    """Resolve ``model="auto"``; returns ``(decision, model, persona_models)``
+    or a typed error JSON string for an unknown ``use_case`` / ``topic``."""
+    try:
+        decision = _model_routing.route_models(
+            questions=questions,
+            persona_pack=pack_id,
+            use_case=use_case,
+            topic=topic,
+            default_model=default_model,
+            warn=lambda msg: logger.warning("%s", msg),
+        )
+    except ValueError as exc:
+        field = "topic" if "topic" in str(exc) else "use_case"
+        return _invalid_tool_arg(f"model='auto': {exc}", field_path=field)
+    model, persona_models, warnings = _model_routing.apply_decision_to_personas(decision, personas)
+    for w in warnings:
+        logger.warning("model routing: %s", w)
+    logger.info("model routing: %s", decision.reason)
+    return decision, model, persona_models
+
+
+def _attach_route_decision(result: Any, decision: _model_routing.RouteDecision | None) -> None:
+    """Echo a ``model="auto"`` decision in the response (and its metadata)."""
+    if decision is None or not isinstance(result, dict) or "error_code" in result:
+        return
+    payload = decision.to_dict()
+    result["model_routing"] = payload
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["model_routing"] = payload
 
 
 def _serialize_content_block(block: Any) -> dict[str, Any]:
@@ -1762,6 +1834,8 @@ async def run_panel(
     accept_multimodal_sampling: bool = False,
     decision_being_informed: str | None = None,
     detail: str = "summary",
+    use_case: str | None = None,
+    topic: str | None = None,
     ctx: Context = None,
 ) -> str | InputRequiredResult:
     """Run a full synthetic focus group panel.
@@ -1872,7 +1946,14 @@ async def run_panel(
             swapped for ``openrouter/anthropic/claude-haiku-4.5`` to avoid
             the multi-minute stalls observed under ``openrouter/auto`` on
             large panels (sy-2ag / GH#462). Explicit values are honored
-            verbatim.
+            verbatim. Pass ``"auto"`` to pick the model, or a weighted
+            blend, from SynthBench routing data (``routing.json``) for this
+            panel's respondent group and question topic. A blend runs as a
+            per-persona split (the same split as the CLI's
+            ``--models a:0.5,b:0.5``), and the decision is returned under
+            ``model_routing`` (models, weights, slice, topic, confident,
+            source, reason). ``"auto"`` cannot be combined with ``models``
+            or ``persona_models``. See docs/model-routing.md.
         response_schema: Optional JSON Schema for structured output. When
             provided, each panelist's responses are extracted as structured
             JSON matching this schema instead of free text.
@@ -1972,6 +2053,14 @@ async def run_panel(
             ``transcript_uri``). ``"full"`` returns every panelist row.
             Applies to persisted BYOK runs; sampling responses (no
             ``result_id``, never persisted) always return full transcripts.
+        use_case: Only with ``model="auto"``. The respondent group to route
+            for: ``us-general``, ``us-subgroups`` or ``cross-national``.
+            Default: inferred from ``pack_id`` (``global-respondents`` is
+            cross-national), otherwise ``us-general``.
+        topic: Only with ``model="auto"``. The question topic to route for
+            (``politics``, ``economy``, ``technology``, ``science-health``,
+            ``identity``, ``society``, ``global`` or ``all``). Default:
+            inferred from the question text.
     """
     if detail not in ("summary", "full"):
         return _invalid_tool_arg(
@@ -1995,6 +2084,14 @@ async def run_panel(
     if isinstance(normalized, str):
         return normalized
     model, models = normalized
+    auto_error = _validate_auto_model_args(
+        model=model, models=models, persona_models=persona_models, use_case=use_case, topic=topic
+    )
+    if auto_error is not None:
+        return auto_error
+    auto_routing = _model_routing.is_auto_model(model)
+    if auto_routing:
+        model = None
     model_was_explicit = model is not None
     variants_k = variants or 0
     if variants_k < 0 or variants_k > 20:
@@ -2108,6 +2205,29 @@ async def run_panel(
             field_path="vars",
         )
 
+    # ── model="auto": SynthBench routing ─────────────────────────────────
+    # Runs after personas and the instrument are resolved so the slice and
+    # topic can be inferred. A blend becomes persona_models (per-persona
+    # split); the decision is echoed in the response under model_routing.
+    route_decision: _model_routing.RouteDecision | None = None
+    if auto_routing:
+        if instrument_obj is not None:
+            routing_questions: list[Any] = [q for rnd in instrument_obj.rounds for q in rnd.questions]
+        else:
+            routing_questions = list(questions or [])
+        assert model is not None
+        routed = _route_auto_model(
+            personas=merged,
+            questions=routing_questions,
+            pack_id=pack_id,
+            use_case=use_case,
+            topic=topic,
+            default_model=model,
+        )
+        if isinstance(routed, str):
+            return routed
+        route_decision, model, persona_models = routed
+
     # ── Sampling fallback: route through MCP sampling when no BYOK creds ─
     # Ensemble mode is BYOK-only (sampling host exposes only one model),
     # so we only consult the decision in the non-ensemble branch.
@@ -2198,6 +2318,7 @@ async def run_panel(
                 # 2026-07-28+ client: sampling rides the InputRequiredResult
                 # retry loop instead of mid-call server→client requests.
                 return suspend.to_input_required()
+            _attach_route_decision(sampling_result, route_decision)
             return json.dumps(apply_response_gate(sampling_result), indent=2)
 
     # ── Ensemble mode: run with each model, compare across models ────────
@@ -2287,6 +2408,7 @@ async def run_panel(
                 rounds=len(instrument_obj.rounds),
                 model=model,
             )
+        _attach_route_decision(result, route_decision)
         return json.dumps(apply_response_gate(result), indent=2)
 
     if not questions:
@@ -2337,6 +2459,7 @@ async def run_panel(
             variants=variants_k,
             model=model,
         )
+    _attach_route_decision(result, route_decision)
     return json.dumps(apply_response_gate(result), indent=2)
 
 
@@ -2357,6 +2480,8 @@ async def run_quick_poll(
     accept_multimodal_sampling: bool = False,
     decision_being_informed: str | None = None,
     detail: str = "summary",
+    use_case: str | None = None,
+    topic: str | None = None,
     ctx: Context = None,
 ) -> str | InputRequiredResult:
     """Quick single-question poll across personas.
@@ -2413,7 +2538,9 @@ async def run_quick_poll(
             at least :data:`LARGE_PANEL_PERSONA_THRESHOLD` personas, the
             default is swapped for ``openrouter/anthropic/claude-haiku-4.5``
             (sy-2ag / GH#462). Ignored in sampling mode (the host agent
-            picks its own model).
+            picks its own model). Pass ``"auto"`` to route from SynthBench
+            data, as in ``run_panel``; a blend is split across personas and
+            the decision is returned under ``model_routing``.
         response_schema: Optional JSON Schema for structured output. When
             provided, responses are extracted as structured JSON matching
             this schema instead of free text. Not supported in sampling
@@ -2453,6 +2580,8 @@ async def run_quick_poll(
             ``get_panel_result(result_id)``); ``"full"`` returns them. See
             ``run_panel``'s ``detail`` for the retained/omitted split.
             Sampling responses always return full transcripts.
+        use_case: Only with ``model="auto"``; same as ``run_panel``.
+        topic: Only with ``model="auto"``; same as ``run_panel``.
     """
     if detail not in ("summary", "full"):
         return _invalid_tool_arg(
@@ -2470,6 +2599,12 @@ async def run_quick_poll(
     )
     if spec_error is not None:
         return spec_error
+    auto_error = _validate_auto_model_args(model=model, use_case=use_case, topic=topic)
+    if auto_error is not None:
+        return auto_error
+    auto_routing = _model_routing.is_auto_model(model)
+    if auto_routing:
+        model = None
     model_was_explicit = model is not None
 
     # GH#576: max_cost boundary check (same rule as run_panel / the CLI).
@@ -2507,6 +2642,22 @@ async def run_quick_poll(
     # swap (sy-2ag) can see the real persona count.
     if not model_was_explicit:
         model = _resolve_mcp_default_model_for_panel(len(personas))
+
+    route_decision: _model_routing.RouteDecision | None = None
+    poll_persona_models: dict[str, str] | None = None
+    if auto_routing:
+        assert model is not None
+        routed = _route_auto_model(
+            personas=personas,
+            questions=[question],
+            pack_id=pack_id,
+            use_case=use_case,
+            topic=topic,
+            default_model=model,
+        )
+        if isinstance(routed, str):
+            return routed
+        route_decision, model, poll_persona_models = routed
 
     decision = _decide_sampling_mode(ctx, use_sampling=use_sampling, model=model)
     logger.info("run_quick_poll: mode=%s model=%s personas=%d", decision.mode, model, len(personas))
@@ -2554,6 +2705,7 @@ async def run_quick_poll(
             # 2026-07-28+ client: sampling rides the InputRequiredResult
             # retry loop instead of mid-call server→client requests.
             return suspend.to_input_required()
+        _attach_route_decision(result, route_decision)
         return json.dumps(apply_response_gate(result), indent=2)
 
     questions = [{"text": question}]
@@ -2569,6 +2721,7 @@ async def run_quick_poll(
             synthesis_prompt=synthesis_prompt,
             temperature=temperature,
             top_p=top_p,
+            persona_models=poll_persona_models,
             decision_being_informed=decision_being_informed,
             decision_warnings=decision_warnings,
             detail=detail,
@@ -2593,6 +2746,7 @@ async def run_quick_poll(
         )
     if "error_code" not in result:
         result["mode"] = "byok"
+    _attach_route_decision(result, route_decision)
     return json.dumps(apply_response_gate(result), indent=2)
 
 

@@ -5,7 +5,19 @@ leaderboard to pick the best-ranked model for the kind of research you're
 running. This closes the credibility loop: scores measured on the bench
 drive defaults in the harness.
 
-## TL;DR
+There are two ways to do this:
+
+- **`--model auto`** (also `model="auto"` on MCP and the SDK) reads
+  SynthBench's `routing.json`. It infers who the panel represents and
+  what the questions are about, picks the best Althing-conditioned model
+  or blend for that pair, falls back when the evidence is weak, and
+  prints a one-sentence reason. This is the recommended option. See
+  [model-routing.md](model-routing.md).
+- **`--best-model-for TOPIC[:DATASET]`** reads `leaderboard.json` and
+  takes the top row for one of the leaderboard's own topic labels. It is
+  described on the rest of this page.
+
+## TL;DR for `--best-model-for`
 
 ```bash
 # Use the top-ranked model for a specific topic
@@ -18,15 +30,15 @@ althing panel run \
 # Top-ranked model across a whole dataset (by SPS)
 althing panel run ... --best-model-for ":globalopinionqa"
 
-# Topic within a non-default dataset
-althing panel run ... --best-model-for "Technology & Digital Life:globalopinionqa"
+# Topic within an explicit dataset
+althing panel run ... --best-model-for "Politics & Governance:globalopinionqa"
 ```
 
 Before the run, Althing prints a recommendation line to stderr so you
 can cancel and override:
 
 ```
-synthbench: best model for globalopinionqa/Economy & Work → claude-haiku-4-5-20251001 · SPS 0.850 · JSD 0.091 · n=100 · $0.032/100q · cached 0h ago · source=live
+synthbench: best model for globalopinionqa/Economy & Work → openrouter/anthropic/claude-sonnet-5.5 · SPS 0.967 · JSD 0.357 · n=100 · cached 0h ago · source=live
 ```
 
 The trailing `source=` field is the **provenance discriminator** (sy-klp).
@@ -39,7 +51,7 @@ package-bundled fallback:
 | `live`              | Fetched from the leaderboard URL this run — or upstream returned 304 confirming the cache is current | As of right now                    |
 | `cache`             | User's on-disk cache was fresh (< 24h), no network call made                                         | Within the last 24h                |
 | `stale-cache`       | Cache exceeded the 24h TTL and the network fetch failed; stale cache used                            | Whenever the cache was last refreshed (see `cached <N>h ago` field) |
-| `bundled-snapshot`  | No user cache and the live fetch failed (or offline mode requested without a cache) — package fallback used | The package release date (currently 2026-04-24) — *not* current |
+| `bundled-snapshot`  | No user cache and the live fetch failed (or offline mode requested without a cache) — package fallback used | The snapshot date (currently 2026-10-14), *not* current |
 
 Agents should treat `live` and `cache` as authoritative, `stale-cache`
 as user-dated (caller's last successful sync), and `bundled-snapshot`
@@ -52,19 +64,28 @@ recommendation will drift from leaderboard reality after the snapshot.
    `https://synthbench.org/data/leaderboard.json` and caches it at
    `~/.althing/synthbench-cache.json` for 24 hours.
 2. Entries are filtered to the requested `dataset` (default
-   `globalopinionqa`), then ranked — by the named topic's score when a
-   topic is given, otherwise by overall SPS.
-3. The top entry's `model` field is resolved through Althing's alias
-   table (so `"haiku"` becomes `claude-haiku-4-5-20251001`) and stamped
-   onto `--model` for the rest of the pipeline.
+   `globalopinionqa`), baseline rows are skipped, and the rest are
+   ranked by the named topic's score when a topic is given, otherwise by
+   overall SPS.
+3. The top entry is turned into a runnable model. Leaderboard rows carry
+   an OpenRouter-style `model_id` such as `qwen/qwen3.8-flash`; Althing
+   runs it as `openrouter/qwen/qwen3.8-flash`, or through a direct
+   provider alias when one exists and you have that provider's key (for
+   example `anthropic/claude-haiku-4.5` becomes
+   `claude-haiku-4-5-20251001` with `ANTHROPIC_API_KEY`). Plain ids like
+   `haiku` go through the alias table. The result is stamped onto
+   `--model`.
+4. When the top entry is a blend (a row with `ensemble_members`), the
+   recommendation carries every member with its weight
+   (`Recommendation.members`, `Recommendation.model_spec()`), and
+   `--best-model-for` uses the first runnable member. Use `--model auto`
+   to run a blend as a weighted split.
 
-> **Note (GH #494, v1.5.1+):** The canonical leaderboard URL is currently
-> 404'ing upstream. Althing ships a **bundled snapshot** (taken
-> 2026-04-24) at `althing/data/synthbench-snapshot.json` and falls
-> back to it when the live URL is unreachable AND no user cache exists.
-> The fallback produces a real recommendation on stderr and tags the
-> entry as `source=bundled-snapshot`. To override with your own mirror,
-> set `ALTHING_SYNTHBENCH_URL=...`.
+> **Bundled snapshot.** Althing ships a trimmed copy of the leaderboard
+> (taken 2026-10-14) at `althing/data/synthbench-snapshot.json` and falls
+> back to it when the live URL is unreachable and no user cache exists.
+> The fallback tags the entry as `source=bundled-snapshot`. To use your
+> own mirror, set `ALTHING_SYNTHBENCH_URL=...`.
 
 ### Environment knobs
 
@@ -145,20 +166,26 @@ The same `source=` field appears at the tail of every stderr
 recommendation line (`format_line()` output), so log-scraping agents
 can extract it with one regex.
 
-## Use-case → top-ranked model
+## What the bundled snapshot says
 
-Snapshot taken from `leaderboard.json` on 2026-04-24. The live data
-updates continuously — this table is for quick orientation; consult the
-CLI flag or [synthbench.org](https://synthbench.org) for current picks.
+Generated from the leaderboard snapshot bundled with this release
+(2026-10-14). Rankings change as new runs land; run the CLI flag or check
+[synthbench.org](https://synthbench.org) for current picks. Topic scores
+on GlobalOpinionQA rest on few questions for some topics (one question
+for "Health & Science"), so treat the per-topic rows as rough.
 
-| Use case                                   | Dataset          | Topic / filter                    | Top SynthBench pick        |
-|--------------------------------------------|------------------|-----------------------------------|----------------------------|
-| General attitudes research                 | globalopinionqa  | (overall SPS)                     | `claude-haiku-4-5-20251001`|
-| Economic / workplace surveys               | globalopinionqa  | "Economy & Work"                  | `claude-haiku-4-5-20251001`|
-| Tech product discovery                     | globalopinionqa  | "Technology & Digital Life"       | `gemini-2.5-flash`         |
-| Health & science messaging                 | globalopinionqa  | "Health & Science"                | see CLI (`--best-model-for "Health & Science"`) |
-| International affairs / policy             | globalopinionqa  | "International Relations & Security" | see CLI                 |
-| Trust & wellbeing                          | globalopinionqa  | "Trust & Wellbeing"               | see CLI                    |
+| `--best-model-for` value | Top row | Model used |
+|---|---|---|
+| `:globalopinionqa` | Blend: Qwen 3.8 Flash (Althing), Sonnet 4 (Althing), DeepSeek V4.1 Flash, Gemini 2.5 Flash-Lite | first member, `openrouter/qwen/qwen3.8-flash` |
+| `:opinionsqa`, `:gss`, `:subpop` | the same four-model blend | first member, `openrouter/qwen/qwen3.8-flash` |
+| `"Economy & Work"` | Althing (Sonnet 5.5) | `openrouter/anthropic/claude-sonnet-5.5` |
+| `"Politics & Governance"` | Blend: Haiku 5.5 (Althing), Llama 3.3 70B, Gemini 2.5 Flash-Lite | first member, `openrouter/anthropic/claude-haiku-5.5` |
+| `"International Relations & Security"` | the four-model blend above | first member, `openrouter/qwen/qwen3.8-flash` |
+| `"General Attitudes"` | Claude Sonnet 4.6 (raw prompt) | `openrouter/anthropic/claude-sonnet-4.6` |
+
+Note that `--best-model-for` ranks every row, including rows that used a
+raw prompt instead of Althing's persona conditioning. `--model auto` only
+picks Althing-conditioned systems.
 
 ## Caveats
 
@@ -167,13 +194,17 @@ CLI flag or [synthbench.org](https://synthbench.org) for current picks.
   their `model` field rather than a runnable provider model id. Althing
   never stamps such a label onto `--model`. Instead it substitutes a runnable
   id in this order:
-  1. The row's runnable `model_id` (e.g. `google/gemini-2.5-flash-lite`)
-     published by SynthBench — joined with `provider_id` as
-     `<provider_id>/<model_id>` when `model_id` is a bare slug.
-  2. For product/ensemble rows (`framework=product`, `is_ensemble=true`)
+  1. For blend rows, the first runnable member of `ensemble_members`.
+  2. The row's runnable `model_id` (e.g. `google/gemini-2.5-flash-lite`)
+     published by SynthBench, run as
+     `openrouter/google/gemini-2.5-flash-lite` (or a direct alias, as
+     above). A bare `model_id` is joined with `provider_id` first, unless
+     `provider_id` is a framework tag such as `althing`, `raw` or
+     `ensemble`.
+  3. For product/ensemble rows (`framework=product`, `is_ensemble=true`)
      without a `model_id`, a base model inferred from the entry's `config_id`,
      adopted only when it resolves to a recognized provider id or alias.
-  3. If neither yields a runnable id, the recommendation is **refused** with
+  4. If none of these yields a runnable id, the recommendation is **refused** with
      an actionable stderr message and Althing keeps your existing
      `--model`/default. A stderr note records any substitution.
 - **Sparse topics.** When the top entry's `run_count < 3`, a
@@ -189,11 +220,11 @@ CLI flag or [synthbench.org](https://synthbench.org) for current picks.
 
 `--best-model-for` picks a single model for the whole panel. It is
 mutually exclusive with `--models` (which splits the panel across
-multiple models) — mixing the two is rejected at parse time.
+multiple models) and with `--model auto`; mixing them is rejected before
+the run starts.
 
 For a *model mix* picker — i.e. when the answer to "which models?" is more
 than one and you want it calibrated to the decision's stake rather than a
-single SynthBench topic — see [docs/model-packs.md](model-packs.md). Packs
-like `balanced-research-ensemble` and `high-stakes-validation` exist
-precisely because the leaderboard shows ensembles outperforming single
-top-ranked models on most contested topics.
+single SynthBench topic — see [docs/model-packs.md](model-packs.md), or
+let `--model auto` pick a blend from benchmark data
+([model-routing.md](model-routing.md)).

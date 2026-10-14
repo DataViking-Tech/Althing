@@ -573,6 +573,17 @@ Pass `model=` explicitly to override (e.g. `"opus"`, `"gpt-4o"`,
 the host agent picks its own model, and the actual model used is
 reported back in the response's `model` field.
 
+**`model="auto"`** on `run_panel` and `run_quick_poll` picks the model
+from SynthBench routing data instead of the credential chain. The
+default above becomes the fallback. Optional `use_case`
+(`us-general`, `us-subgroups`, `cross-national`) and `topic` arguments
+override what the server infers from `pack_id` and the question text.
+When the pick is a blend, the server splits the personas across the
+blend's models (the same split as the CLI's weighted `--models`) and
+passes it as `persona_models`. The decision comes back in the response
+under `model_routing`. `"auto"` cannot be combined with `models` or
+`persona_models`. See [model-routing.md](model-routing.md).
+
 ### Tool coverage
 
 `run_prompt`, `run_panel`, and `run_quick_poll` go through both stages

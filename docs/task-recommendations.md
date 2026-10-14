@@ -15,21 +15,21 @@
 | **Broad mass-appeal copy / naming** | `broad-professionals` (20) | `consumer-mass-appeal` weighted split, or `balanced-research-ensemble` before publishing | "Person on the street" coverage; if results will be cited externally, use the model-diverse ensemble |
 | **Enterprise GTM / procurement narrative** | `enterprise-ai-buyers` (18) **and/or** `skeptical-executives` (18) | `skeptical-red-team-ensemble` (`sonnet,gpt-4o,gemini-2.5-pro`) at `--temperature 0.9` | These personas are vendor-fatigued and ROI-fixated; the higher-rigor ensemble surfaces objections cheaper models miss |
 | **Trust / credibility / methodology audit** | `market-research-critics` (16) | `skeptical-red-team-ensemble` | Hostile audience by design — pair with the model pack that doesn't agreement-bias |
-| **Pricing discovery** | `general-consumer` (15) or audience-specific pack | `fast-cheap-preflight` for tier shape → `balanced-research-ensemble` for the actual price point | Cheap models lock in the shape; spend on the ensemble when the number matters |
-| **AI / eval tooling discovery** | `ai-eval-buyers` (20) | `--best-model-for "Technology & Digital Life"` (SynthBench-driven) for single-model runs; `balanced-research-ensemble` for high-stakes | This audience reads benchmark numbers — match the model choice to leaderboard evidence |
+| **Pricing discovery** | `general-consumer` (15) or audience-specific pack | `fast-cheap-preflight` for tier shape → a weighted split such as `--models 'haiku:0.34,sonnet:0.33,gemini-2.5-flash:0.33'` for the actual price point | Cheap models lock in the shape; spend on more models when the number matters. The bundled `pricing-discovery` instrument is multi-round, so `--blend` is refused; the weighted split works |
+| **AI / eval tooling discovery** | `ai-eval-buyers` (20) | `--model auto` (SynthBench-driven model or blend); `balanced-research-ensemble` for high-stakes | This audience reads benchmark numbers, so match the model choice to benchmark evidence |
 | **Dev-tool feedback / technical positioning** | `developer` (15) or `startup-founder` (15) | `technical-founder-research` (`sonnet:0.4,gpt-4o:0.4,gemini-2.5-pro:0.2`) | Technical buyers detect glibness; weight toward the higher-quality families |
 | **Hiring / talent / job-search messaging** | `recruiters-talent` (15) for employer-side, `job-seekers` (15) for candidate-side | `fast-cheap-preflight` for shape → `balanced-research-ensemble` for finals | Two distinct audiences — don't pool them; run separate panels |
 | **Healthcare messaging / patient comms** | `healthcare-patient` (15) | `balanced-research-ensemble` by default; **never single-model for clinical/compliance** copy | Stakes are high; ensemble + `althing report` + human SME review is the floor |
 | **Education / student outreach** | `students` (15) | `fast-cheap-preflight` for early loops; `consumer-mass-appeal` weighted split for finals | Age-skewed audience; the weighted split keeps cost down |
 | **Founder / early-stage hypothesis testing** | `startup-founder` (15) | `fast-cheap-preflight` is enough until you're charging money | Founders forgive directional answers; save the ensemble budget for paying-customer questions |
-| **Pre-launch / board-deck / go-no-go** | Audience-appropriate pack (above) | `high-stakes-validation` 4-way ensemble + `--blend` | The one place you *should* spend on the full ensemble + blend |
+| **Pre-launch / board-deck / go-no-go** | Audience-appropriate pack (above) | `high-stakes-validation` 4-way ensemble + `--blend` (single-round instruments only; weighted split for multi-round) | The one place you *should* spend on the full ensemble + blend |
 
 > **Heuristic for the model-config column:** if a human is going to act
 > on the answer, use an **ensemble**. If an agent is just orienting
 > itself ("does this question even make sense?"), `fast-cheap-preflight`
-> is fine. The SynthBench-driven `--best-model-for "<topic>"` slot is
-> for the in-between case: a single model, chosen by leaderboard
-> evidence rather than vibes.
+> is fine. `--model auto` is for the in-between case: a model or blend
+> chosen from SynthBench results for your respondent group and question
+> topic. See [docs/model-routing.md](model-routing.md).
 
 ## When single-model is acceptable
 
@@ -46,15 +46,14 @@ Use a single cheap model (`fast-cheap-preflight`) when:
 - The decision is **directional**, not quantitative — "are people
   excited or skeptical?" rather than "what % would buy at $79?".
 
-Use a **SynthBench-recommended** single model (`--best-model-for
-"<topic>"`) when:
+Use **SynthBench routing** (`--model auto`) when:
 
-- You need a single number/distribution and want it to be backed by
-  leaderboard evidence. The CLI prints the choice + Synth-Population
-  Score (SPS) + JSD to stderr before the run, so the choice is
-  inspectable and overridable. See
-  [docs/recommended-models.md](recommended-models.md) for the full flag
-  reference.
+- You want the model choice backed by benchmark evidence for your kind
+  of respondents and questions. The CLI prints the chosen model or
+  blend, the slice, the topic, whether the route is confident, and a
+  one-sentence reason to stderr before the run, and records the same
+  under `metadata.model_routing`. See
+  [docs/model-routing.md](model-routing.md).
 
 ## When to escalate to an ensemble
 
@@ -169,21 +168,21 @@ althing panel run \
   --output-format json
 ```
 
-### AI / eval discovery — SynthBench-guided single model
+### AI / eval discovery — SynthBench-routed model
 
 ```bash
 althing pack export ai-eval-buyers > /tmp/ai-eval-buyers.yaml
 althing panel run \
   --personas /tmp/ai-eval-buyers.yaml \
   --instrument /tmp/eval-tool-positioning.yaml \
-  --best-model-for "Technology & Digital Life" \
+  --model auto --topic technology \
   --output-format json
 ```
 
-`--best-model-for` consults the SynthBench leaderboard for the named
-topic and prints its choice to stderr before the run (see
-[docs/recommended-models.md](recommended-models.md)). Override with
-`--model <alias>` if you want to ignore the recommendation.
+`--model auto` reads SynthBench routing data and prints its choice and
+reason to stderr before the run (see
+[docs/model-routing.md](model-routing.md)). Pass `--model <alias>`
+instead if you want to choose yourself.
 
 ### Healthcare patient messaging — ensemble + report
 
@@ -225,16 +224,16 @@ althing panel run --personas /tmp/job-seekers.yaml \
 These are not arbitrary defaults. They follow from three observations
 that SynthBench surfaces in the live leaderboard data:
 
-1. **No single model is best at everything.** Different families top
-   different topic slices on
-   [SynthBench](https://synthbench.org) — `claude-haiku-4-5` leads
-   "Economy & Work", `gemini-2.5-flash` leads "Technology & Digital
-   Life". Single-model panels inherit the leading model's blind spots
-   wholesale. → ensemble for high-stakes work.
-2. **Model-diverse ensembles narrow the variance to the human baseline**
-   on most topics. The trade-off is cost (N× panel) and latency
-   (parallel but bounded by the slowest provider). → reserve ensembles
-   for decisions that will be acted on.
+1. **No single model is best at everything.** Which model leads on
+   [SynthBench](https://synthbench.org) changes by dataset and topic,
+   and the rankings move as models are added. Single-model panels
+   inherit that model's blind spots. → ensemble for high-stakes work.
+2. **Blends of models from different families rank high.** On the
+   leaderboard snapshot bundled with this release, a multi-family blend
+   tops each core dataset. The trade-off is cost (N× panel for a full
+   ensemble) and latency (parallel but bounded by the slowest
+   provider). → reserve full ensembles for decisions that will be acted
+   on; a weighted split gets family diversity at single-model cost.
 3. **Skeptical audiences are not just persona-skeptical — they're
    model-skeptical.** Cheap models agreement-bias against critical
    personas, so combining a hostile pack with a cheap model gives you
@@ -244,6 +243,7 @@ that SynthBench surfaces in the live leaderboard data:
 
 For deeper context: [docs/model-packs.md](model-packs.md) walks each
 model pack with cost order-of-magnitude;
+[docs/model-routing.md](model-routing.md) covers `--model auto`;
 [docs/recommended-models.md](recommended-models.md) covers
 `--best-model-for`; [docs/ensemble.md](ensemble.md) covers the
 `--models` syntax and `--blend` algorithm;

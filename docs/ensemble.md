@@ -62,11 +62,17 @@ Given a spec like `a:0.5,b:0.5` and N personas, the algorithm is:
 2. **Normalize.** Sum the weights, divide each by the total. Absolute
    magnitudes don't matter — `a:2,b:3`, `a:0.4,b:0.6`, and `a:40,b:60`
    all produce the same split.
-3. **Split proportionally.** For each model *except the last*, allocate
-   `round(weight_normalized * pool_size)` personas. The last model
-   absorbs whatever's left. This guarantees totals always sum exactly to
-   the pool size, with no rounding gap.
-4. **Fill in order.** Personas are consumed from the pool in the order
+3. **Largest remainder.** Each model first gets the whole part of
+   `weight_normalized * pool_size`. The personas left over go one each
+   to the models with the largest fractional parts. When two models tie
+   on the fractional part, the one listed earlier in the spec wins. The
+   totals always add up to the pool size.
+4. **At least one each.** When there are at least as many personas as
+   models, every model gets at least one persona: a model that ended up
+   with none takes one from the model that currently has the most. When
+   there are fewer personas than models, some models get none and the
+   CLI prints a warning naming them.
+5. **Fill in order.** Personas are consumed from the pool in the order
    they appear in the YAML (minus YAML-override ones). Model order
    matches the `--models` spec.
 
@@ -80,13 +86,15 @@ same assignment, every run. No RNG, no seed.
 With 7 personas and three equal models (`a:0.33,b:0.33,c:0.33`):
 
 ```
-round(0.33 * 7) = 2  → a gets 2
-round(0.33 * 7) = 2  → b gets 2
-remainder             → c gets 3
+whole parts: 2.33 → 2, 2.33 → 2, 2.33 → 2   (6 assigned, 1 left)
+fractional parts tie at 0.33, so the earlier model wins
+→ a gets 3, b gets 2, c gets 2
 ```
 
-**Swapping model order changes who gets the extra.** If you care about
-balance, put the model you want to over-sample last.
+With 7 personas at `a:0.5,b:0.5` the split is 4 / 3.
+
+**Swapping model order changes who gets the extra on a tie.** If you
+care about balance, put the model you want to over-sample first.
 
 ### Weights that don't sum to 1.0
 
@@ -201,7 +209,21 @@ parameters:
   wants one; MCP accepts the final map directly, which avoids rounding
   ambiguity across clients.
 - `models: list[str]` — ensemble mode only. Every persona answers every
-  model.
+  model. The response has per-model results; there is no `blend`
+  block and no blended distributions on the MCP surface.
 
-There is no weighted-spec parser on the MCP surface — it's a CLI
-convenience, not a protocol concern.
+There is no weighted-spec parser on the MCP surface. Strings like
+`"haiku:0.5"` are rejected with an error.
+
+`model="auto"` is the exception: when SynthBench routing picks a blend,
+the server computes the same largest-remainder split shown above and
+passes it as `persona_models`. See [model-routing.md](model-routing.md).
+
+## Auto routing
+
+`--model auto` (CLI), `model="auto"` (MCP) and `run_panel(model="auto")`
+(SDK) pick a model or a weighted blend from SynthBench data. A routed
+blend runs as the weighted split described above, so it works on
+multi-round instruments too. `--blend` stays an explicit opt-in and
+still requires a single-round instrument. See
+[model-routing.md](model-routing.md).
