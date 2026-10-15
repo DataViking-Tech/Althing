@@ -18,19 +18,19 @@ output for an instrument whose questions are mostly about technology and
 privacy (the models and numbers depend on the current data):
 
 ```
-model routing: openrouter/anthropic/claude-haiku-4.5 (33%), openrouter/google/gemini-2.5-flash-lite (33%), openrouter/openai/gpt-4o-mini (33%)
+model routing: openrouter/qwen/qwen3.8-flash (25%), openrouter/google/gemini-3.5-flash-lite (25%), openrouter/meta-llama/llama-3.3-70b-instruct (25%), openrouter/openai/gpt-6-luna (25%)
 model routing: slice=us-general topic=technology confident=true source=live
-model routing: Ensemble: Haiku 4.5, Gemini 2.5 Flash-Lite, GPT-4o mini (Althing) is the top Althing-conditioned blend for US general public on Technology and media (SynthBench index 48.5, 49 questions).
+model routing: Ensemble: Qwen 3.8 Flash, Gemini 3.5 Flash-Lite, Llama 3.3 70B, GPT-6 Luna (Althing) is the top Althing-conditioned blend for US general public on Technology and media (SynthBench index 51.5, 151 questions).
 ```
 
-When the evidence is weak, the reason says so. For example, a panel
-filtered with `--population country=France,Japan` asking about the
-economy gets:
+When the evidence for the topic is weak, the reason says so and the
+slice's all-topics route is used instead. For example, a panel filtered
+with `--population country=France,Japan` asking about the economy gets:
 
 ```
-model routing: openrouter/anthropic/claude-haiku-4.5 (33%), openrouter/google/gemini-2.5-flash-lite (33%), openrouter/openai/gpt-4o-mini (33%)
-model routing: slice=cross-national topic=economy confident=false source=live
-model routing: The Economy and work route for Respondents outside the US is not confident (n=6) and the all-topics route for Respondents outside the US is not confident (n=100), so this uses Ensemble: Haiku 4.5, Gemini 2.5 Flash-Lite, GPT-4o mini (Althing), the top Althing-conditioned blend for Respondents outside the US on all topics (SynthBench index 16.2, 100 questions), though its lead over the next system is not clear.
+model routing: openrouter/qwen/qwen3.8-flash (25%), openrouter/google/gemini-3.5-flash-lite (25%), openrouter/meta-llama/llama-3.3-70b-instruct (25%), openrouter/openai/gpt-6-luna (25%)
+model routing: slice=cross-national topic=economy confident=true source=live
+model routing: The Economy and work route for Respondents outside the US is not confident (n=75), so this uses Ensemble: Qwen 3.8 Flash, Gemini 3.5 Flash-Lite, Llama 3.3 70B, GPT-6 Luna (Althing), the top Althing-conditioned blend for Respondents outside the US on all topics (SynthBench index 19.9, 525 questions).
 ```
 
 The same decision is saved in the run's JSON output under
