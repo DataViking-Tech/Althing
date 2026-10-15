@@ -6,6 +6,15 @@ For auto-generated release notes, see [GitHub Releases](https://github.com/DataV
 
 ## [Unreleased]
 
+### Changed
+
+- **Bundled routing snapshot refreshed** from the published
+  `https://synthbench.org/data/routing.json` (SynthBench #389). Topics now
+  have 75+ questions per route for most slices, and `--model auto` picks
+  the SynthBench routing blend (Qwen 3.8 Flash, Gemini 3.5 Flash-Lite,
+  Llama 3.3 70B, GPT-6 Luna, all through Althing) when no live data or
+  cache is available.
+
 ### Added
 
 - **Auto model routing (`--model auto`).** `althing panel run --model auto`,
